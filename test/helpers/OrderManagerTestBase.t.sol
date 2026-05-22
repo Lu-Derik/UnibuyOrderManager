@@ -1,0 +1,228 @@
+// SPDX-License-Identifier: MIT
+pragma solidity ^0.8.26;
+
+import {Test} from "forge-std/Test.sol";
+
+import {UnibuyPoolManager}    from "@unibuy/UnibuyPoolManager.sol";
+import {IUnibuyPoolManager}   from "@unibuy/interfaces/IUnibuyPoolManager.sol";
+import {IProtocolFees}        from "@unibuy/interfaces/IProtocolFees.sol";
+import {PoolFeeLibrary}       from "@unibuy/libraries/PoolFeeLibrary.sol";
+import {UnibuyPoolKey, UnibuyPoolId, UnibuyPoolIdLibrary} from "@unibuy/types/UnibuyPoolKey.sol";
+import {Currency}             from "@unibuy/types/Currency.sol";
+import {StateLibrary}         from "@unibuy/libraries/StateLibrary.sol";
+import {TickMath}             from "@unibuy/libraries/TickMath.sol";
+
+import {UnibuyOrderManager}   from "../../src/UnibuyOrderManager.sol";
+import {TestERC20}            from "./TestERC20.sol";
+import {IAllowanceTransfer}   from "permit2/interfaces/IAllowanceTransfer.sol";
+import {IWETH9}               from "../../src/interfaces/external/IWETH9.sol";
+
+/// @title OrderManagerTestBase
+/// @notice Shared test setup for all UnibuyOrderManager tests.
+///         Deploys the pool manager, order manager, two ERC-20 tokens, and
+///         initialises a pair of mirror pools at price 1:1.
+abstract contract OrderManagerTestBase is Test {
+    using UnibuyPoolIdLibrary for UnibuyPoolKey;
+    using StateLibrary        for IUnibuyPoolManager;
+
+    // ─────────────────────────────────────────────────────────────────────────
+    // Constants
+    // ─────────────────────────────────────────────────────────────────────────
+
+    int24  internal constant TICK_SPACING   = 60;
+    uint8  internal constant TAKER_FEE      = 30;   // 0.30 %
+    uint8  internal constant MAKER_FEE      = 5;    // 0.05 %
+    uint8  internal constant OFFSET_FEE     = 20;   // 0.20 %
+    uint8  internal constant TICK_GAP_LIMIT = 50;
+
+    /// @dev Canonical 1:1 sqrt price (tick = 0).
+    uint160 internal constant SQRT_PRICE_1_1 = 79228162514264337593543950336;
+
+    // ─────────────────────────────────────────────────────────────────────────
+    // Actors
+    // ─────────────────────────────────────────────────────────────────────────
+
+    address internal alice = makeAddr("alice");
+    address internal bob   = makeAddr("bob");
+    address internal carol = makeAddr("carol");
+    address internal dave  = makeAddr("dave");   // taker
+
+    // ─────────────────────────────────────────────────────────────────────────
+    // Contracts
+    // ─────────────────────────────────────────────────────────────────────────
+
+    TestERC20           internal tokenA;
+    TestERC20           internal tokenB;
+    UnibuyPoolManager   internal poolManager;
+    UnibuyOrderManager  internal orderManager;
+
+    /// @dev Forward pool: sell tokenA (currencyIn) for tokenB (currencyOut).
+    UnibuyPoolKey internal poolKey;
+    /// @dev Mirror pool: sell tokenB (currencyIn) for tokenA (currencyOut).
+    UnibuyPoolKey internal mirrorKey;
+
+    // ─────────────────────────────────────────────────────────────────────────
+    // Setup
+    // ─────────────────────────────────────────────────────────────────────────
+
+    function setUp() public virtual {
+        tokenA = new TestERC20("Token A", "TKA", 18);
+        tokenB = new TestERC20("Token B", "TKB", 18);
+
+        poolManager  = new UnibuyPoolManager();
+        
+        // Create mock addresses for permit2 and WETH9
+        address mockPermit2 = makeAddr("permit2");
+        address mockWETH9 = makeAddr("weth9");
+        
+        orderManager = new UnibuyOrderManager(
+            address(poolManager),
+            IAllowanceTransfer(mockPermit2),
+            IWETH9(mockWETH9)
+        );
+
+        poolKey = UnibuyPoolKey({
+            currencyIn:  Currency.wrap(address(tokenA)),
+            currencyOut: Currency.wrap(address(tokenB)),
+            tickSpacing: TICK_SPACING
+        });
+        mirrorKey = UnibuyPoolKey({
+            currencyIn:  Currency.wrap(address(tokenB)),
+            currencyOut: Currency.wrap(address(tokenA)),
+            tickSpacing: TICK_SPACING
+        });
+
+        // Configure fee tier
+        uint24 poolFee = PoolFeeLibrary.pack(TAKER_FEE, MAKER_FEE, OFFSET_FEE);
+        IProtocolFees(address(poolManager)).setTickSpacingSettings(
+            TICK_SPACING, poolFee, TICK_GAP_LIMIT
+        );
+
+        // Initialize both pools at price 1:1
+        poolManager.initialize(poolKey, SQRT_PRICE_1_1);
+
+        // Fund actors
+        _fundActors();
+    }
+
+    function _fundActors() internal {
+        address[4] memory actors = [alice, bob, carol, dave];
+        for (uint256 i = 0; i < actors.length; i++) {
+            tokenA.mint(actors[i], 10_000_000 ether);
+            tokenB.mint(actors[i], 10_000_000 ether);
+            vm.prank(actors[i]);
+            tokenA.approve(address(orderManager), type(uint256).max);
+            vm.prank(actors[i]);
+            tokenB.approve(address(orderManager), type(uint256).max);
+        }
+    }
+
+    // ─────────────────────────────────────────────────────────────────────────
+    // Helpers — pool state queries
+    // ─────────────────────────────────────────────────────────────────────────
+
+    /// @dev Read (sqrtPriceX96, tick, poolHeight) for the forward pool.
+    function _getSlot0Fwd() internal view returns (uint160 sqrtX96, int24 tick, uint32 height) {
+        (sqrtX96, tick, height,,,,) = IUnibuyPoolManager(address(poolManager)).getSlot0(poolKey.toId());
+    }
+
+    /// @dev Read (sqrtPriceX96, tick, poolHeight) for the mirror pool.
+    function _getSlot0Mirror() internal view returns (uint160 sqrtX96, int24 tick, uint32 height) {
+        (sqrtX96, tick, height,,,,) = IUnibuyPoolManager(address(poolManager)).getSlot0(mirrorKey.toId());
+    }
+
+    // ─────────────────────────────────────────────────────────────────────────
+    // Helpers — order operations
+    // ─────────────────────────────────────────────────────────────────────────
+
+    /// @dev Place a sell maker order in the forward pool via orderManager.
+    ///      Returns (tokenId, compensation).
+    function _placeSellOrder(
+        address maker,
+        int24   tickLower,
+        int24   tickUpper,
+        uint128 liquidity
+    ) internal returns (uint256 tokenId, uint96 compensation) {
+        // Ensure forward pool price is compatible with the tick range.
+        _ensureMirrorPriceOk(tickLower);
+
+        vm.prank(maker);
+        (tokenId, compensation) = orderManager.placeOrder(
+            poolKey, tickLower, tickUpper, liquidity, block.timestamp + 1 hours
+        );
+    }
+
+    /// @dev Place a buy maker order in the mirror pool via orderManager.
+    function _placeBuyOrder(
+        address maker,
+        int24   tickLower,   // forward-pool tick lower
+        int24   tickUpper,   // forward-pool tick upper
+        uint128 liquidity
+    ) internal returns (uint256 tokenId, uint96 compensation) {
+        int24 mirrorTl = -tickUpper;
+        int24 mirrorTu = -tickLower;
+        vm.prank(maker);
+        (tokenId, compensation) = orderManager.placeOrder(
+            mirrorKey, mirrorTl, mirrorTu, liquidity, block.timestamp + 1 hours
+        );
+    }
+
+    /// @dev Execute a taker buy (pay tokenB, receive tokenA) via orderManager.
+    function _takerBuy(
+        address taker,
+        uint256 token1Amount,   // tokenB to spend
+        uint160 sqrtPriceLimit
+    ) internal returns (uint256 token0Out, uint256 token1In, uint256 fee) {
+        tokenB.mint(taker, token1Amount);
+        vm.prank(taker);
+        (token1In, token0Out, fee) = orderManager.takeOrder(
+            poolKey,
+            true,               // exactInput
+            token1Amount,
+            sqrtPriceLimit,
+            taker,
+            block.timestamp + 1 hours
+        );
+    }
+
+    /// @dev Execute a taker sell (pay tokenA, receive tokenB) via orderManager.
+    function _takerSell(
+        address taker,
+        uint256 token0Amount,   // tokenA to sell
+        uint160 sqrtMinPriceFwd // min forward price (1 = no limit)
+    ) internal returns (uint256 token0In, uint256 token1Out, uint256 fee) {
+        tokenA.mint(taker, token0Amount);
+        // Convert the old forward-space sentinel to no limit in resolved mirror pool terms.
+        uint160 mirrorLimit = sqrtMinPriceFwd <= 1 ? TickMath.MAX_SQRT_PRICE : sqrtMinPriceFwd;
+        vm.prank(taker);
+        (token0In, token1Out, fee) = orderManager.takeOrder(
+            mirrorKey,
+            true,               // exactInput
+            token0Amount,
+            mirrorLimit,
+            taker,
+            block.timestamp + 1 hours
+        );
+    }
+
+    /// @dev Close a maker order and return (token0Amount, token1Amount).
+    function _closeOrder(
+        address maker,
+        uint256 tokenId
+    ) internal returns (uint256 token0Amount, uint256 token1Amount) {
+        vm.prank(maker);
+        (token0Amount, token1Amount) = orderManager.closeMakerOrder(
+            tokenId, poolKey, block.timestamp + 1 hours
+        );
+    }
+
+    // ─────────────────────────────────────────────────────────────────────────
+    // Internal helpers
+    // ─────────────────────────────────────────────────────────────────────────
+
+    /// @dev Stub for checking mirror price compatibility. More comprehensive validation
+    ///      can be added if tick ranges in negative territory are tested.
+    function _ensureMirrorPriceOk(int24 /*tickLower*/) internal pure {
+        // No action required for tests using positive tick ranges.
+    }
+}

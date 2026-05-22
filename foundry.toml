@@ -1,0 +1,15 @@
+[profile.default]
+src        = "src"
+test       = "test"
+out        = "out"
+libs       = ["lib"]
+solc       = "0.8.26"
+via_ir     = true
+optimizer_runs = 800
+evm_version = "cancun"
+gas_limit  = "300000000"
+bytecode_hash = "none"
+
+[profile.default.fuzz]
+runs = 1000
+seed = "0x4444"

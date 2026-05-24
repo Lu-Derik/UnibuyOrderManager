@@ -19,6 +19,7 @@ import {BaseActionsRouter}   from "./base/BaseActionsRouter.sol";
 import {DeltaResolver}       from "./base/DeltaResolver.sol";
 import {IUnibuyOrderManager} from "./interfaces/IUnibuyOrderManager.sol";
 import {Actions}             from "./libraries/Actions.sol";
+import {PathKey} from "./libraries/PathKey.sol";
 import {PackedOrderInfo, OrderInfoLibrary} from "./libraries/OrderInfoLibrary.sol";
 import {CalldataDecoder} from "./libraries/CalldataDecoder.sol";
 import {IAllowanceTransfer}  from "permit2/interfaces/IAllowanceTransfer.sol";
@@ -105,7 +106,7 @@ contract UnibuyOrderManager is
         checkDeadline(deadline)
     {
         (uint160 cur,,,,,, ) = poolManager.getSlot0(key.toId());
-        if (sqrtPriceLimitX96 < cur) revert BuyPriceBelowCurrent(sqrtPriceLimitX96, cur);
+        if (sqrtPriceLimitX96 <= cur) revert BuyPriceBelowCurrent(sqrtPriceLimitX96, cur);
 
         bytes memory actions = abi.encodePacked(
             Actions.TAKE_ORDER_INPUT_SINGLE,
@@ -122,7 +123,8 @@ contract UnibuyOrderManager is
 
     /// @inheritdoc IUnibuyOrderManager
     function takeOrderInput(
-        UnibuyPoolKey[] calldata path,
+        Currency currencyIn,
+        PathKey[] calldata path,
         address recipient,
         uint256 amountIn,
         uint256 amountOutMinimum,
@@ -133,17 +135,20 @@ contract UnibuyOrderManager is
         isNotLocked
         checkDeadline(deadline)
     {
-        if (path.length == 0) revert ZeroAmount();
-
         bytes memory actions = abi.encodePacked(
             Actions.TAKE_ORDER_INPUT,
             Actions.SETTLE_ALL,
             Actions.TAKE_ALL
         );
+        if (path.length == 0) revert ZeroAmount();
+
         bytes[] memory params = new bytes[](3);
-        params[0] = abi.encode(path, amountIn, amountOutMinimum);
-        params[1] = abi.encode(path[0].currency1);                              // user pays
-        params[2] = abi.encode(path[path.length - 1].currency0, recipient);     // user receives
+        params[0] = abi.encode(currencyIn, path, amountIn, amountOutMinimum);
+        params[1] = abi.encode(currencyIn); // user pays
+        params[2] = abi.encode(
+            path[path.length - 1].intermediateCurrency,
+            recipient
+        ); // user receives
 
         _executeActions(abi.encode(actions, params));
     }
@@ -163,7 +168,7 @@ contract UnibuyOrderManager is
         checkDeadline(deadline)
     {
         (uint160 cur,,,,,, ) = poolManager.getSlot0(key.toId());
-        if (sqrtPriceLimitX96 < cur) revert BuyPriceBelowCurrent(sqrtPriceLimitX96, cur);
+        if (sqrtPriceLimitX96 <= cur) revert BuyPriceBelowCurrent(sqrtPriceLimitX96, cur);
 
         bytes memory actions = abi.encodePacked(
             Actions.TAKE_ORDER_OUTPUT_SINGLE,
@@ -180,7 +185,8 @@ contract UnibuyOrderManager is
 
     /// @inheritdoc IUnibuyOrderManager
     function takeOrderOutput(
-        UnibuyPoolKey[] calldata path,
+        Currency currencyOut,
+        PathKey[] calldata path,
         address recipient,
         uint256 amountOut,
         uint256 amountInMaximum,
@@ -191,17 +197,17 @@ contract UnibuyOrderManager is
         isNotLocked
         checkDeadline(deadline)
     {
-        if (path.length == 0) revert ZeroAmount();
-
         bytes memory actions = abi.encodePacked(
             Actions.TAKE_ORDER_OUTPUT,
             Actions.SETTLE_ALL,
             Actions.TAKE_ALL
         );
+        if (path.length == 0) revert ZeroAmount();
+
         bytes[] memory params = new bytes[](3);
-        params[0] = abi.encode(path, amountOut, amountInMaximum);
-        params[1] = abi.encode(path[0].currency1);                              // user pays
-        params[2] = abi.encode(path[path.length - 1].currency0, recipient);     // user receives
+        params[0] = abi.encode(currencyOut, path, amountOut, amountInMaximum);
+        params[1] = abi.encode(path[0].intermediateCurrency); // user pays
+        params[2] = abi.encode(currencyOut, recipient); // user receives
 
         _executeActions(abi.encode(actions, params));
     }
@@ -406,21 +412,30 @@ contract UnibuyOrderManager is
     }
 
     /// @dev Executes a multi-hop exact-input taker swap.
-    /// @param params abi.encode(UnibuyPoolKey[] path, uint256 amountIn, uint256 amountOutMinimum)
+    /// @param params abi.encode(Currency currencyIn, PathKey[] path, uint256 amountIn, uint256 amountOutMinimum)
     function _handleTakeOrderInput(bytes calldata params) internal {
-        (UnibuyPoolKey[] memory path, uint256 amountIn, uint256 amountOutMinimum) =
-            abi.decode(params, (UnibuyPoolKey[], uint256, uint256));
+        (Currency currencyIn, PathKey[] memory path, uint256 amountIn, uint256 amountOutMinimum) =
+            abi.decode(params, (Currency, PathKey[], uint256, uint256));
 
         if (amountIn == 0) revert ZeroAmount();
         if (path.length == 0) revert ZeroAmount();
 
         uint256 currentAmount = amountIn;
         for (uint256 i = 0; i < path.length; i++) {
+            PathKey memory hop = path[i];
+            UnibuyPoolKey memory hopKey = UnibuyPoolKey({
+                currency0: hop.intermediateCurrency,
+                currency1: currencyIn,
+                tickSpacing: hop.tickSpacing
+            });
+
             (int128 delta0,) =
                 // forge-lint: disable-next-line(unsafe-typecast)
-                poolManager.takeOrder(path[i], -int256(currentAmount), TickMath.MAX_SQRT_PRICE);
+                poolManager.takeOrder(hopKey, -int256(currentAmount), TickMath.MAX_SQRT_PRICE);
+
             // forge-lint: disable-next-line(unsafe-typecast)
-            currentAmount = delta0 > 0 ? uint256(uint128(delta0)) : 0;
+            currentAmount = uint256(uint128(delta0));
+            currencyIn = hop.intermediateCurrency;
         }
 
         if (currentAmount < amountOutMinimum) revert TooLittleReceived(amountOutMinimum, currentAmount);
@@ -445,10 +460,10 @@ contract UnibuyOrderManager is
     }
 
     /// @dev Executes a multi-hop exact-output taker swap (reversed path traversal).
-    /// @param params abi.encode(UnibuyPoolKey[] path, uint256 amountOut, uint256 amountInMaximum)
+    /// @param params abi.encode(Currency currencyOut, PathKey[] path, uint256 amountOut, uint256 amountInMaximum)
     function _handleTakeOrderOutput(bytes calldata params) internal {
-        (UnibuyPoolKey[] memory path, uint256 amountOut, uint256 amountInMaximum) =
-            abi.decode(params, (UnibuyPoolKey[], uint256, uint256));
+        (Currency currencyOut, PathKey[] memory path, uint256 amountOut, uint256 amountInMaximum) =
+            abi.decode(params, (Currency, PathKey[], uint256, uint256));
 
         if (amountOut == 0) revert ZeroAmount();
         if (path.length == 0) revert ZeroAmount();
@@ -457,11 +472,19 @@ contract UnibuyOrderManager is
         uint256 currentAmount = amountOut;
         for (uint256 i = path.length; i > 0; ) {
             unchecked { --i; }
+            PathKey memory hop = path[i];
+            UnibuyPoolKey memory hopKey = UnibuyPoolKey({
+                currency0: currencyOut,
+                currency1: hop.intermediateCurrency,
+                tickSpacing: hop.tickSpacing
+            });
             (, int128 delta1) =
                 // forge-lint: disable-next-line(unsafe-typecast)
-                poolManager.takeOrder(path[i], int256(currentAmount), TickMath.MAX_SQRT_PRICE);
-            // forge-lint: disable-next-line(unsafe-typecast)
-            currentAmount = delta1 < 0 ? uint256(uint128(-delta1)) : 0;
+                poolManager.takeOrder(hopKey, int256(currentAmount), TickMath.MAX_SQRT_PRICE);
+
+            // forge-lint: disable-next-line(unsafe-typecast)    
+            currentAmount = uint256(uint128(-delta1));
+            currencyOut = hop.intermediateCurrency;
         }
 
         if (currentAmount > amountInMaximum) revert TooMuchRequested(amountInMaximum, currentAmount);

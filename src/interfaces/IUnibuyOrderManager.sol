@@ -2,6 +2,8 @@
 pragma solidity ^0.8.26;
 
 import {UnibuyPoolKey} from "@unibuy/types/UnibuyPoolKey.sol";
+import {Currency} from "@unibuy/types/Currency.sol";
+import {PathKey} from "../libraries/PathKey.sol";
 
 /// @title IUnibuyOrderManager
 /// @notice User-facing interface for the UniBuy order management contract.
@@ -96,15 +98,17 @@ interface IUnibuyOrderManager {
         uint256 deadline
     ) external payable;
 
-    /// @notice Execute a multi-hop exact-input taker order (path of pools).
+    /// @notice Execute an exact-input taker order with a first pool and optional follow-up hops.
     ///
-    /// @param path               Ordered array of pool keys; currency0 of path[i] == currency1 of path[i+1].
-    /// @param recipient          Address that receives the output token (currency0 of last pool).
-    /// @param amountIn           Exact amount of currency1 of path[0] to spend.
-    /// @param amountOutMinimum   Minimum amount of currency0 of path[last] to receive.
+    /// @param currencyIn         Input currency for the first hop.
+    /// @param path               Forward-ordered hop outputs. Each entry defines the next output currency and tick spacing.
+    /// @param recipient          Address that receives the final output token.
+    /// @param amountIn           Exact amount of input token to spend.
+    /// @param amountOutMinimum   Minimum final output amount to receive.
     /// @param deadline           Block timestamp after which the call reverts.
     function takeOrderInput(
-        UnibuyPoolKey[] calldata path,
+        Currency currencyIn,
+        PathKey[] calldata path,
         address recipient,
         uint256 amountIn,
         uint256 amountOutMinimum,
@@ -128,15 +132,17 @@ interface IUnibuyOrderManager {
         uint256 deadline
     ) external payable;
 
-    /// @notice Execute a multi-hop exact-output taker order (path traversed in reverse).
+    /// @notice Execute an exact-output taker order with a first pool and optional follow-up hops.
     ///
-    /// @param path               Ordered array of pool keys; currency0 of path[i] == currency1 of path[i+1].
-    /// @param recipient          Address that receives the output token (currency0 of last pool).
-    /// @param amountOut          Exact amount of currency0 of path[last] to receive.
-    /// @param amountInMaximum    Maximum amount of currency1 of path[0] to spend.
+    /// @param currencyOut        Output currency for the final hop.
+    /// @param path               Reverse-ordered hop outputs. Each entry defines the next output currency and tick spacing.
+    /// @param recipient          Address that receives the final output token.
+    /// @param amountOut          Exact final output amount to receive.
+    /// @param amountInMaximum    Maximum input amount to spend.
     /// @param deadline           Block timestamp after which the call reverts.
     function takeOrderOutput(
-        UnibuyPoolKey[] calldata path,
+        Currency currencyOut,
+        PathKey[] calldata path,
         address recipient,
         uint256 amountOut,
         uint256 amountInMaximum,

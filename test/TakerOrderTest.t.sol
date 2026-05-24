@@ -5,6 +5,7 @@ import {OrderManagerTestBase} from "./helpers/OrderManagerTestBase.t.sol";
 import {TickMath}             from "@unibuy/libraries/TickMath.sol";
 import {UnibuyPoolKey}        from "@unibuy/types/UnibuyPoolKey.sol";
 import {Currency}             from "@unibuy/types/Currency.sol";
+import {PathKey} from "../src/libraries/PathKey.sol";
 import {TestERC20}            from "./helpers/TestERC20.sol";
 
 /// @title TakerOrderTest
@@ -319,14 +320,21 @@ contract TakerOrderTest is OrderManagerTestBase {
 
     /// @dev Set up a 2-hop path: pay tokenB → (via poolKey) → tokenA → (via zPool) → tokenC.
     ///
-    ///   path[0] = poolKey  : currency0=tokenA,  currency1=tokenB  (pay tokenB, get tokenA)
-    ///   path[1] = zPool    : currency0=tokenC,  currency1=tokenA  (pay tokenA, get tokenC)
+    ///   currencyIn = tokenB
+    ///   inputPath  = [tokenA, tokenC]
+    ///   outputPath = [tokenB, tokenA]
     function _setup2HopPath()
         internal
-        returns (TestERC20 tokenC, UnibuyPoolKey memory zPool, UnibuyPoolKey[] memory path)
+        returns (
+            TestERC20 tokenC,
+            Currency currencyIn,
+            Currency currencyOut,
+            PathKey[] memory inputPath,
+            PathKey[] memory outputPath
+        )
     {
         tokenC = new TestERC20("Token C", "TKC", 18);
-        zPool = UnibuyPoolKey({
+        UnibuyPoolKey memory zPool = UnibuyPoolKey({
             currency0: Currency.wrap(address(tokenC)),
             currency1: Currency.wrap(address(tokenA)),
             tickSpacing: TICK_SPACING
@@ -340,14 +348,31 @@ contract TakerOrderTest is OrderManagerTestBase {
         vm.prank(alice);
         orderManager.placeOrder(zPool, TL, TU, LIQ, block.timestamp + 1 hours);
 
-        // Build path
-        path = new UnibuyPoolKey[](2);
-        path[0] = poolKey;  // currency0=tokenA, currency1=tokenB
-        path[1] = zPool;    // currency0=tokenC, currency1=tokenA
+        currencyIn = Currency.wrap(address(tokenB));
+        currencyOut = Currency.wrap(address(tokenC));
+        inputPath = new PathKey[](2);
+        inputPath[0] = PathKey({
+            intermediateCurrency: Currency.wrap(address(tokenA)),
+            tickSpacing: TICK_SPACING
+        });
+        inputPath[1] = PathKey({
+            intermediateCurrency: Currency.wrap(address(tokenC)),
+            tickSpacing: TICK_SPACING
+        });
+
+        outputPath = new PathKey[](2);
+        outputPath[0] = PathKey({
+            intermediateCurrency: Currency.wrap(address(tokenB)),
+            tickSpacing: TICK_SPACING
+        });
+        outputPath[1] = PathKey({
+            intermediateCurrency: Currency.wrap(address(tokenA)),
+            tickSpacing: TICK_SPACING
+        });
     }
 
     function test_takeOrderInput_multiHop_receivesTokenC() public {
-        (TestERC20 tokenC, , UnibuyPoolKey[] memory path) = _setup2HopPath();
+        (TestERC20 tokenC, Currency currencyIn, , PathKey[] memory path, ) = _setup2HopPath();
 
         uint256 amountIn = 1e15;
         tokenB.mint(dave, amountIn);
@@ -357,7 +382,7 @@ contract TakerOrderTest is OrderManagerTestBase {
         uint256 cBefore = tokenC.balanceOf(dave);
         vm.prank(dave);
         orderManager.takeOrderInput(
-            path, dave, amountIn, 0, block.timestamp + 1 hours
+            currencyIn, path, dave, amountIn, 0, block.timestamp + 1 hours
         );
         uint256 actualOut = tokenC.balanceOf(dave) - cBefore;
         uint256 actualIn = amountIn; // exact-input: full amount spent
@@ -368,7 +393,7 @@ contract TakerOrderTest is OrderManagerTestBase {
     }
 
     function test_takeOrderInput_slippageRevert() public {
-        (TestERC20 tokenC, , UnibuyPoolKey[] memory path) = _setup2HopPath();
+        (TestERC20 tokenC, Currency currencyIn, , PathKey[] memory path, ) = _setup2HopPath();
 
         uint256 amountIn = 1e15;
         tokenB.mint(dave, amountIn);
@@ -378,7 +403,7 @@ contract TakerOrderTest is OrderManagerTestBase {
         uint256 snap = vm.snapshot();
         vm.prank(dave);
         orderManager.takeOrderInput(
-            path, dave, amountIn, 0, block.timestamp + 1 hours
+            currencyIn, path, dave, amountIn, 0, block.timestamp + 1 hours
         );
         uint256 actualOut = tokenC.balanceOf(dave) - cBefore;
         vm.revertTo(snap);
@@ -392,7 +417,7 @@ contract TakerOrderTest is OrderManagerTestBase {
                 actualOut
             )
         );
-        orderManager.takeOrderInput(path, dave, amountIn, actualOut + 1, block.timestamp + 1 hours);
+        orderManager.takeOrderInput(currencyIn, path, dave, amountIn, actualOut + 1, block.timestamp + 1 hours);
     }
 
     // ─────────────────────────────────────────────────────────────────────────
@@ -400,7 +425,7 @@ contract TakerOrderTest is OrderManagerTestBase {
     // ─────────────────────────────────────────────────────────────────────────
 
     function test_takeOrderOutput_multiHop_receivesExactTokenC() public {
-        (TestERC20 tokenC, , UnibuyPoolKey[] memory path) = _setup2HopPath();
+        (TestERC20 tokenC, , Currency currencyOut, , PathKey[] memory path) = _setup2HopPath();
 
         uint256 amountOut = 5e14;
         tokenB.mint(dave, 10e18);
@@ -411,7 +436,7 @@ contract TakerOrderTest is OrderManagerTestBase {
         uint256 cBefore = tokenC.balanceOf(dave);
         vm.prank(dave);
         orderManager.takeOrderOutput(
-            path, dave, amountOut, type(uint256).max, block.timestamp + 1 hours
+            currencyOut, path, dave, amountOut, type(uint256).max, block.timestamp + 1 hours
         );
         uint256 actualIn = inBefore - tokenB.balanceOf(dave);
         uint256 actualOut = amountOut; // exact output
@@ -422,7 +447,7 @@ contract TakerOrderTest is OrderManagerTestBase {
     }
 
     function test_takeOrderOutput_slippageRevert() public {
-        (, , UnibuyPoolKey[] memory path) = _setup2HopPath();
+        (, , Currency currencyOut, , PathKey[] memory path) = _setup2HopPath();
 
         uint256 amountOut = 5e14;
         tokenB.mint(dave, 10e18);
@@ -432,7 +457,7 @@ contract TakerOrderTest is OrderManagerTestBase {
         uint256 snap = vm.snapshot();
         vm.prank(dave);
         orderManager.takeOrderOutput(
-            path, dave, amountOut, type(uint256).max, block.timestamp + 1 hours
+            currencyOut, path, dave, amountOut, type(uint256).max, block.timestamp + 1 hours
         );
         uint256 actualIn = inBefore - tokenB.balanceOf(dave);
         vm.revertTo(snap);
@@ -446,6 +471,6 @@ contract TakerOrderTest is OrderManagerTestBase {
                 actualIn
             )
         );
-        orderManager.takeOrderOutput(path, dave, amountOut, actualIn - 1, block.timestamp + 1 hours);
+        orderManager.takeOrderOutput(currencyOut, path, dave, amountOut, actualIn - 1, block.timestamp + 1 hours);
     }
 }

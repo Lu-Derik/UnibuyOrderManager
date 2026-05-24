@@ -244,11 +244,11 @@ contract SecurityTest is OrderManagerTestBase {
         assertEq(orderManager.getApproved(tokenId), bob);
 
         // Bob closes alice's order
+        vm.startPrank(bob);
         uint256 t0Before = tokenA.balanceOf(bob);
-        vm.prank(bob);
-        (uint256 t0,) = orderManager.closeMakerOrder(
-            tokenId, poolKey, block.timestamp + 1 hours
-        );
+        orderManager.closeMakerOrder(tokenId, poolKey, block.timestamp + 1 hours);
+        vm.stopPrank();
+        uint256 t0 = tokenA.balanceOf(bob) - t0Before;
         assertGt(t0, 0, "approved operator should receive token0");
         assertEq(tokenA.balanceOf(bob), t0Before + t0, "bob balance should increase");
 
@@ -267,10 +267,11 @@ contract SecurityTest is OrderManagerTestBase {
         assertTrue(orderManager.isApprovedForAll(alice, carol));
 
         // Carol closes alice's order
-        vm.prank(carol);
-        (uint256 t0,) = orderManager.closeMakerOrder(
-            tokenId, poolKey, block.timestamp + 1 hours
-        );
+        vm.startPrank(carol);
+        uint256 t0Before = tokenA.balanceOf(carol);
+        orderManager.closeMakerOrder(tokenId, poolKey, block.timestamp + 1 hours);
+        vm.stopPrank();
+        uint256 t0 = tokenA.balanceOf(carol) - t0Before;
         assertGt(t0, 0, "operator-for-all should receive token0");
 
         // NFT must be burned
@@ -287,10 +288,9 @@ contract SecurityTest is OrderManagerTestBase {
         tokenA.approve(address(orderManager), type(uint256).max);
 
         // Place order as aliceSigner
+        uint256 tokenId = orderManager.nextTokenId();
         vm.prank(aliceSigner);
-        (uint256 tokenId,) = orderManager.placeOrder(
-            poolKey, TL, TU, uint128(LIQ), block.timestamp + 1 hours
-        );
+        orderManager.placeOrder(poolKey, TL, TU, uint128(LIQ), block.timestamp + 1 hours);
         assertEq(orderManager.ownerOf(tokenId), aliceSigner);
 
         // aliceSigner signs a permit allowing bob to manage tokenId
@@ -309,10 +309,11 @@ contract SecurityTest is OrderManagerTestBase {
         assertEq(orderManager.getApproved(tokenId), bob, "permit should set approval");
 
         // Bob can now close the order
-        vm.prank(bob);
-        (uint256 t0,) = orderManager.closeMakerOrder(
-            tokenId, poolKey, block.timestamp + 1 hours
-        );
+        vm.startPrank(bob);
+        uint256 t0Before = tokenA.balanceOf(bob);
+        orderManager.closeMakerOrder(tokenId, poolKey, block.timestamp + 1 hours);
+        vm.stopPrank();
+        uint256 t0 = tokenA.balanceOf(bob) - t0Before;
         assertGt(t0, 0, "permit-approved spender should receive token0");
     }
 
@@ -385,7 +386,7 @@ contract SecurityTest is OrderManagerTestBase {
         uint256 daveEthBefore  = address(dave).balance;
 
         vm.prank(dave);
-        uint256 amtOut = orderManager.takeOrderInputSingle{value: ethAmount}(
+        orderManager.takeOrderInputSingle{value: ethAmount}(
             nativePool,
             dave,
             ethAmount,
@@ -393,7 +394,8 @@ contract SecurityTest is OrderManagerTestBase {
             TickMath.getSqrtPriceAtTick(TU),
             block.timestamp + 1 hours
         );
-        uint256 amtIn = ethAmount; // exact-input: full amount spent
+        uint256 amtOut = tokenA.balanceOf(dave) - daveTkABefore;
+        uint256 amtIn = daveEthBefore - address(dave).balance;
 
         // ── Assertions ────────────────────────────────────────────────────────
         assertGt(amtOut, 0,                    "taker should receive tokenA");

@@ -72,7 +72,6 @@ interface IUnibuyOrderManager {
     error SellPriceAboveCurrent(uint160 limitSqrtPrice, uint160 currentSqrtPrice);
     error ZeroAmount();
     error InvalidActionType(uint8 action);
-    error InputLengthMismatch();
     error TooLittleReceived(uint256 minAmountOut, uint256 actualAmountOut);
     error TooMuchRequested(uint256 maxAmountIn, uint256 actualAmountIn);
 
@@ -88,8 +87,6 @@ interface IUnibuyOrderManager {
     /// @param amountOutMinimum   Minimum amount of currency0 to receive (slippage guard).
     /// @param sqrtPriceLimitX96  Price ceiling in sqrt Q64.96 terms; must be >= current price.
     /// @param deadline           Block timestamp after which the call reverts.
-    ///
-    /// @return amountOut  Actual currency0 delivered to recipient.
     function takeOrderInputSingle(
         UnibuyPoolKey calldata key,
         address recipient,
@@ -97,7 +94,7 @@ interface IUnibuyOrderManager {
         uint256 amountOutMinimum,
         uint160 sqrtPriceLimitX96,
         uint256 deadline
-    ) external payable returns (uint256 amountOut);
+    ) external payable;
 
     /// @notice Execute a multi-hop exact-input taker order (path of pools).
     ///
@@ -106,15 +103,13 @@ interface IUnibuyOrderManager {
     /// @param amountIn           Exact amount of currency1 of path[0] to spend.
     /// @param amountOutMinimum   Minimum amount of currency0 of path[last] to receive.
     /// @param deadline           Block timestamp after which the call reverts.
-    ///
-    /// @return amountOut  Actual output token delivered to recipient.
     function takeOrderInput(
         UnibuyPoolKey[] calldata path,
         address recipient,
         uint256 amountIn,
         uint256 amountOutMinimum,
         uint256 deadline
-    ) external payable returns (uint256 amountOut);
+    ) external payable;
 
     /// @notice Execute a single-pool exact-output taker order.
     ///
@@ -124,8 +119,6 @@ interface IUnibuyOrderManager {
     /// @param amountInMaximum    Maximum amount of currency1 to spend (slippage guard).
     /// @param sqrtPriceLimitX96  Price ceiling in sqrt Q64.96 terms; must be >= current price.
     /// @param deadline           Block timestamp after which the call reverts.
-    ///
-    /// @return amountIn  Actual currency1 spent by msg.sender.
     function takeOrderOutputSingle(
         UnibuyPoolKey calldata key,
         address recipient,
@@ -133,7 +126,7 @@ interface IUnibuyOrderManager {
         uint256 amountInMaximum,
         uint160 sqrtPriceLimitX96,
         uint256 deadline
-    ) external payable returns (uint256 amountIn);
+    ) external payable;
 
     /// @notice Execute a multi-hop exact-output taker order (path traversed in reverse).
     ///
@@ -142,15 +135,13 @@ interface IUnibuyOrderManager {
     /// @param amountOut          Exact amount of currency0 of path[last] to receive.
     /// @param amountInMaximum    Maximum amount of currency1 of path[0] to spend.
     /// @param deadline           Block timestamp after which the call reverts.
-    ///
-    /// @return amountIn  Actual input token spent.
     function takeOrderOutput(
         UnibuyPoolKey[] calldata path,
         address recipient,
         uint256 amountOut,
         uint256 amountInMaximum,
         uint256 deadline
-    ) external payable returns (uint256 amountIn);
+    ) external payable;
 
     // ─────────────────────────────────────────────────────────────────────────
     // Maker order
@@ -164,26 +155,22 @@ interface IUnibuyOrderManager {
     /// @param liquidity  Virtual liquidity to provide.
     /// @param deadline   Expiry timestamp.
     ///
-    /// @return tokenId      ERC-721 token ID (burned on close).
-    /// @return compensation Internal exchange fee pre-deducted from future proceeds.
     function placeOrder(
         UnibuyPoolKey calldata key,
         int24   tickLower,
         int24   tickUpper,
         uint128 liquidity,
         uint256 deadline
-    ) external payable returns (uint256 tokenId, uint96 compensation);
+    ) external payable;
 
     /// @notice Close (cancel) a maker order and withdraw all proceeds.
     ///         Burns the NFT.  Caller must be current NFT owner.
     ///
-    /// @return token0Amount  token0 returned (unfilled deposit or purchased amount).
-    /// @return token1Amount  token1 returned (earned or unfilled deposit).
     function closeMakerOrder(
         uint256             tokenId,
         UnibuyPoolKey calldata key,
         uint256             deadline
-    ) external returns (uint256 token0Amount, uint256 token1Amount);
+    ) external;
 
     // ─────────────────────────────────────────────────────────────────────────
     // Mixed order
@@ -202,9 +189,6 @@ interface IUnibuyOrderManager {
     /// @param recipient           Receives the output token from the taker step.
     /// @param deadline            Expiry timestamp.
     ///
-    /// @return takerAmountSpent   Actual input consumed by the taker step.
-    /// @return takerAmountOut     Output delivered to `recipient` from the taker step.
-    /// @return makerTokenId       NFT token ID for the maker portion (0 if skipped).
     function mixedOrder(
         UnibuyPoolKey calldata takerKey,
         uint256 takerAmountIn,
@@ -215,11 +199,7 @@ interface IUnibuyOrderManager {
         uint128 makerLiquidity,
         address recipient,
         uint256 deadline
-    ) external returns (
-        uint256 takerAmountSpent,
-        uint256 takerAmountOut,
-        uint256 makerTokenId
-    );
+    ) external;
 
     // ─────────────────────────────────────────────────────────────────────────
     // Batch execute
@@ -242,13 +222,11 @@ interface IUnibuyOrderManager {
     /// @param actions  Packed action bytes (one byte per action).
     /// @param params   ABI-encoded parameters, one element per action.
     /// @param deadline Block timestamp after which the call reverts.
-    /// @return results ABI-encoded return values, one element per action.
-    ///                 Order actions return useful data; settlement actions return "".
     function execute(
         bytes calldata actions,
         bytes[] calldata params,
         uint256 deadline
-    ) external payable returns (bytes[] memory results);
+    ) external payable;
 
     // ─────────────────────────────────────────────────────────────────────────
     // View

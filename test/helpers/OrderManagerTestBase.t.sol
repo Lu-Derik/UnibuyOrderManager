@@ -146,10 +146,10 @@ abstract contract OrderManagerTestBase is Test {
         // Ensure forward pool price is compatible with the tick range.
         _ensureMirrorPriceOk(tickLower);
 
+        tokenId = orderManager.nextTokenId();
         vm.prank(maker);
-        (tokenId, compensation) = orderManager.placeOrder(
-            poolKey, tickLower, tickUpper, liquidity, block.timestamp + 1 hours
-        );
+        orderManager.placeOrder(poolKey, tickLower, tickUpper, liquidity, block.timestamp + 1 hours);
+        compensation = 0;
     }
 
     /// @dev Place a buy maker order in the mirror pool via orderManager.
@@ -161,10 +161,10 @@ abstract contract OrderManagerTestBase is Test {
     ) internal returns (uint256 tokenId, uint96 compensation) {
         int24 mirrorTl = -tickUpper;
         int24 mirrorTu = -tickLower;
+        tokenId = orderManager.nextTokenId();
         vm.prank(maker);
-        (tokenId, compensation) = orderManager.placeOrder(
-            mirrorKey, mirrorTl, mirrorTu, liquidity, block.timestamp + 1 hours
-        );
+        orderManager.placeOrder(mirrorKey, mirrorTl, mirrorTu, liquidity, block.timestamp + 1 hours);
+        compensation = 0;
     }
 
     /// @dev Execute a taker buy (pay tokenB, receive tokenA) via orderManager.
@@ -174,8 +174,10 @@ abstract contract OrderManagerTestBase is Test {
         uint160 sqrtPriceLimit
     ) internal returns (uint256 token0Out, uint256 token1In) {
         tokenB.mint(taker, token1Amount);
+        uint256 token0Before = tokenA.balanceOf(taker);
+        uint256 token1Before = tokenB.balanceOf(taker);
         vm.prank(taker);
-        token0Out = orderManager.takeOrderInputSingle(
+        orderManager.takeOrderInputSingle(
             poolKey,
             taker,              // recipient
             token1Amount,       // amountIn
@@ -183,7 +185,8 @@ abstract contract OrderManagerTestBase is Test {
             sqrtPriceLimit,
             block.timestamp + 1 hours
         );
-        token1In = token1Amount; // exact-input: full amount is spent
+        token0Out = tokenA.balanceOf(taker) - token0Before;
+        token1In = token1Before - tokenB.balanceOf(taker);
     }
 
     /// @dev Execute a taker sell (pay tokenA, receive tokenB) via orderManager.
@@ -195,8 +198,10 @@ abstract contract OrderManagerTestBase is Test {
         tokenA.mint(taker, token0Amount);
         // Convert the old forward-space sentinel to no limit in resolved mirror pool terms.
         uint160 mirrorLimit = sqrtMinPriceFwd <= 1 ? TickMath.MAX_SQRT_PRICE : sqrtMinPriceFwd;
+        uint256 token0Before = tokenA.balanceOf(taker);
+        uint256 token1Before = tokenB.balanceOf(taker);
         vm.prank(taker);
-        token1Out = orderManager.takeOrderInputSingle(
+        orderManager.takeOrderInputSingle(
             mirrorKey,
             taker,              // recipient
             token0Amount,       // amountIn
@@ -204,7 +209,8 @@ abstract contract OrderManagerTestBase is Test {
             mirrorLimit,
             block.timestamp + 1 hours
         );
-        token0In = token0Amount; // exact-input: full amount is spent
+        token0In = token0Before - tokenA.balanceOf(taker);
+        token1Out = tokenB.balanceOf(taker) - token1Before;
     }
 
     /// @dev Close a maker order and return (token0Amount, token1Amount).
@@ -212,10 +218,12 @@ abstract contract OrderManagerTestBase is Test {
         address maker,
         uint256 tokenId
     ) internal returns (uint256 token0Amount, uint256 token1Amount) {
+        uint256 token0Before = tokenA.balanceOf(maker);
+        uint256 token1Before = tokenB.balanceOf(maker);
         vm.prank(maker);
-        (token0Amount, token1Amount) = orderManager.closeMakerOrder(
-            tokenId, poolKey, block.timestamp + 1 hours
-        );
+        orderManager.closeMakerOrder(tokenId, poolKey, block.timestamp + 1 hours);
+        token0Amount = tokenA.balanceOf(maker) - token0Before;
+        token1Amount = tokenB.balanceOf(maker) - token1Before;
     }
 
     // ─────────────────────────────────────────────────────────────────────────

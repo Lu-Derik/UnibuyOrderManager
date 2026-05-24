@@ -16,6 +16,7 @@ import {ReentrancyLock}      from "./base/ReentrancyLock.sol";
 import {Permit2Forwarder}    from "./base/Permit2Forwarder.sol";
 import {NativeWrapper}       from "./base/NativeWrapper.sol";
 import {BaseActionsRouter}   from "./base/BaseActionsRouter.sol";
+import {DeltaResolver}       from "./base/DeltaResolver.sol";
 import {IUnibuyOrderManager} from "./interfaces/IUnibuyOrderManager.sol";
 import {Actions}             from "./libraries/Actions.sol";
 import {PackedOrderInfo, OrderInfoLibrary} from "./libraries/OrderInfoLibrary.sol";
@@ -34,6 +35,7 @@ contract UnibuyOrderManager is
     Multicall_v4,
     ReentrancyLock,
     BaseActionsRouter,
+    DeltaResolver,
     Permit2Forwarder,
     NativeWrapper,
     IUnibuyOrderManager
@@ -101,7 +103,6 @@ contract UnibuyOrderManager is
         payable
         isNotLocked
         checkDeadline(deadline)
-        returns (uint256 amountOut)
     {
         (uint160 cur,,,,,, ) = poolManager.getSlot0(key.toId());
         if (sqrtPriceLimitX96 < cur) revert BuyPriceBelowCurrent(sqrtPriceLimitX96, cur);
@@ -116,9 +117,7 @@ contract UnibuyOrderManager is
         params[1] = abi.encode(key.currency1);             // user pays
         params[2] = abi.encode(key.currency0, recipient);  // user receives
 
-        bytes memory raw = _executeActions(abi.encode(actions, params));
-        bytes[] memory results = abi.decode(raw, (bytes[]));
-        amountOut = abi.decode(results[0], (uint256));
+        _executeActions(abi.encode(actions, params));
     }
 
     /// @inheritdoc IUnibuyOrderManager
@@ -133,7 +132,6 @@ contract UnibuyOrderManager is
         payable
         isNotLocked
         checkDeadline(deadline)
-        returns (uint256 amountOut)
     {
         if (path.length == 0) revert ZeroAmount();
 
@@ -147,9 +145,7 @@ contract UnibuyOrderManager is
         params[1] = abi.encode(path[0].currency1);                              // user pays
         params[2] = abi.encode(path[path.length - 1].currency0, recipient);     // user receives
 
-        bytes memory raw = _executeActions(abi.encode(actions, params));
-        bytes[] memory results = abi.decode(raw, (bytes[]));
-        amountOut = abi.decode(results[0], (uint256));
+        _executeActions(abi.encode(actions, params));
     }
 
     /// @inheritdoc IUnibuyOrderManager
@@ -165,7 +161,6 @@ contract UnibuyOrderManager is
         payable
         isNotLocked
         checkDeadline(deadline)
-        returns (uint256 amountIn)
     {
         (uint160 cur,,,,,, ) = poolManager.getSlot0(key.toId());
         if (sqrtPriceLimitX96 < cur) revert BuyPriceBelowCurrent(sqrtPriceLimitX96, cur);
@@ -180,9 +175,7 @@ contract UnibuyOrderManager is
         params[1] = abi.encode(key.currency1);             // user pays
         params[2] = abi.encode(key.currency0, recipient);  // user receives
 
-        bytes memory raw = _executeActions(abi.encode(actions, params));
-        bytes[] memory results = abi.decode(raw, (bytes[]));
-        amountIn = abi.decode(results[0], (uint256));
+        _executeActions(abi.encode(actions, params));
     }
 
     /// @inheritdoc IUnibuyOrderManager
@@ -197,7 +190,6 @@ contract UnibuyOrderManager is
         payable
         isNotLocked
         checkDeadline(deadline)
-        returns (uint256 amountIn)
     {
         if (path.length == 0) revert ZeroAmount();
 
@@ -211,9 +203,7 @@ contract UnibuyOrderManager is
         params[1] = abi.encode(path[0].currency1);                              // user pays
         params[2] = abi.encode(path[path.length - 1].currency0, recipient);     // user receives
 
-        bytes memory raw = _executeActions(abi.encode(actions, params));
-        bytes[] memory results = abi.decode(raw, (bytes[]));
-        amountIn = abi.decode(results[0], (uint256));
+        _executeActions(abi.encode(actions, params));
     }
 
     // ─────────────────────────────────────────────────────────────────────────
@@ -232,16 +222,13 @@ contract UnibuyOrderManager is
         payable
         isNotLocked
         checkDeadline(deadline)
-        returns (uint256 tokenId, uint96 compensation)
     {
         bytes memory actions = abi.encodePacked(Actions.PLACE_MAKER, Actions.SETTLE_ALL);
         bytes[] memory params = new bytes[](2);
         params[0] = abi.encode(key, tickLower, tickUpper, liquidity, msg.sender);
         params[1] = abi.encode(key.currency0);
 
-        bytes memory raw = _executeActions(abi.encode(actions, params));
-        bytes[] memory results = abi.decode(raw, (bytes[]));
-        (tokenId, compensation) = abi.decode(results[0], (uint256, uint96));
+        _executeActions(abi.encode(actions, params));
     }
 
     // ─────────────────────────────────────────────────────────────────────────
@@ -257,7 +244,6 @@ contract UnibuyOrderManager is
         external
         isNotLocked
         checkDeadline(deadline)
-        returns (uint256 token0Amount, uint256 token1Amount)
     {
         // Look up the stored pool key to determine settlement currencies for TAKE_PAIR.
         bytes25 poolId = _orders[tokenId].poolId();
@@ -268,9 +254,7 @@ contract UnibuyOrderManager is
         params[0] = abi.encode(key, tokenId);
         params[1] = abi.encode(resolvedPool.currency0, resolvedPool.currency1, msg.sender);
 
-        bytes memory raw = _executeActions(abi.encode(actions, params));
-        bytes[] memory results = abi.decode(raw, (bytes[]));
-        (token0Amount, token1Amount) = abi.decode(results[0], (uint256, uint256));
+        _executeActions(abi.encode(actions, params));
     }
 
     // ─────────────────────────────────────────────────────────────────────────
@@ -292,7 +276,6 @@ contract UnibuyOrderManager is
         external
         isNotLocked
         checkDeadline(deadline)
-        returns (uint256 takerAmountSpent, uint256 takerAmountOut, uint256 makerTokenId)
     {
         uint160 takerPoolPriceLimit;
         if (takerAmountIn > 0) {
@@ -339,18 +322,7 @@ contract UnibuyOrderManager is
             params[1] = abi.encode(takerKey.currency1);
         }
 
-        bytes memory raw = _executeActions(abi.encode(actions, params));
-        bytes[] memory results = abi.decode(raw, (bytes[]));
-
-        if (takerAmountIn > 0) {
-            takerAmountOut = abi.decode(results[0], (uint256));
-            takerAmountSpent = takerAmountIn; // exact-input: full amount is spent
-        }
-
-        if (makerLiquidity > 0) {
-            uint256 makerIdx = takerAmountIn > 0 ? 1 : 0;
-            (makerTokenId, ) = abi.decode(results[makerIdx], (uint256, uint96));
-        }
+        _executeActions(abi.encode(actions, params));
     }
 
     // ─────────────────────────────────────────────────────────────────────────
@@ -367,46 +339,47 @@ contract UnibuyOrderManager is
         payable
         isNotLocked
         checkDeadline(deadline)
-        returns (bytes[] memory results)
     {
-        bytes memory raw = _executeActions(abi.encode(actions, params));
-        results = abi.decode(raw, (bytes[]));
-    }
-
-    // ─────────────────────────────────────────────────────────────────────────
-    // Unlock callback (SafeCallback pattern)
-    // ─────────────────────────────────────────────────────────────────────────
-
-    /// @inheritdoc BaseActionsRouter
-    function _unlockCallback(bytes calldata data) internal override returns (bytes memory) {
-        (bytes calldata actions, bytes[] calldata params) = data.decodeActionsRouterParams();
-        uint256 n = actions.length;
-        if (n != params.length) revert InputLengthMismatch();
-        bytes[] memory results = new bytes[](n);
-        for (uint256 i = 0; i < n; i++) {
-            results[i] = _handleAction(uint8(actions[i]), params[i]);
-        }
-        return abi.encode(results);
+        _executeActions(abi.encode(actions, params));
     }
 
     // ─────────────────────────────────────────────────────────────────────────
     // Action dispatcher
     // ─────────────────────────────────────────────────────────────────────────
 
-    function _handleAction(uint8 action, bytes calldata params) internal returns (bytes memory) {
-        if (action == Actions.TAKE_ORDER_INPUT_SINGLE)  return _handleTakeOrderInputSingle(params);
-        if (action == Actions.TAKE_ORDER_INPUT)         return _handleTakeOrderInput(params);
-        if (action == Actions.TAKE_ORDER_OUTPUT_SINGLE) return _handleTakeOrderOutputSingle(params);
-        if (action == Actions.TAKE_ORDER_OUTPUT)        return _handleTakeOrderOutput(params);
-        if (action == Actions.PLACE_MAKER)              return _handleMaker(params);
-        if (action == Actions.CLOSE_MAKER)              return _handleClose(params);
-        if (action == Actions.SETTLE)                   return _handleSettle(params);
-        if (action == Actions.SETTLE_ALL)               return _handleSettleAll(params);
-        if (action == Actions.TAKE)                     return _handleTake(params);
-        if (action == Actions.TAKE_ALL)                 return _handleTakeAll(params);
-        if (action == Actions.SETTLE_PAIR)              return _handleSettlePair(params);
-        if (action == Actions.TAKE_PAIR)                return _handleTakePair(params);
-        revert InvalidActionType(action);
+    function _handleAction(uint256 action, bytes calldata params) internal override {
+        if (action == Actions.TAKE_ORDER_INPUT_SINGLE) {
+            _handleTakeOrderInputSingle(params);
+        } else if (action == Actions.TAKE_ORDER_INPUT) {
+            _handleTakeOrderInput(params);
+        } else if (action == Actions.TAKE_ORDER_OUTPUT_SINGLE) {
+            _handleTakeOrderOutputSingle(params);
+        } else if (action == Actions.TAKE_ORDER_OUTPUT) {
+            _handleTakeOrderOutput(params);
+        } else if (action == Actions.PLACE_MAKER) {
+            _handleMaker(params);
+        } else if (action == Actions.CLOSE_MAKER) {
+            _handleClose(params);
+        } else if (action == Actions.SETTLE) {
+            _handleSettle(params);
+        } else if (action == Actions.SETTLE_ALL) {
+            _handleSettleAll(params);
+        } else if (action == Actions.TAKE) {
+            _handleTake(params);
+        } else if (action == Actions.TAKE_ALL) {
+            _handleTakeAll(params);
+        } else if (action == Actions.SETTLE_PAIR) {
+            _handleSettlePair(params);
+        } else if (action == Actions.TAKE_PAIR) {
+            _handleTakePair(params);
+        } else {
+            revert InvalidActionType(uint8(action));
+        }
+    }
+
+    /// @inheritdoc BaseActionsRouter
+    function msgSender() public view override returns (address) {
+        return _getLocker();
     }
 
     // ─────────────────────────────────────────────────────────────────────────
@@ -415,34 +388,26 @@ contract UnibuyOrderManager is
 
     /// @dev Executes a single-pool exact-input taker swap.
     /// @param params abi.encode(UnibuyPoolKey poolKey, uint256 amountIn, uint256 amountOutMinimum, uint160 sqrtPriceLimitX96)
-    /// @return abi.encode(uint256 amountOut)
-    function _handleTakeOrderInputSingle(bytes calldata params) internal returns (bytes memory) {
+    function _handleTakeOrderInputSingle(bytes calldata params) internal {
         (UnibuyPoolKey calldata poolKey, uint256 amountIn, uint256 amountOutMinimum, uint160 sqrtPriceLimitX96) =
             params.decodeTakeOrderInputSingleParams();
 
         if (amountIn == 0) revert ZeroAmount();
 
-        (int128 delta0, int128 delta1) =
+        (int128 delta0,) =
             // forge-lint: disable-next-line(unsafe-typecast)
             poolManager.takeOrder(poolKey, -int256(amountIn), sqrtPriceLimitX96);
 
         // delta0 > 0  -> pool owes currency0 to this contract (user output)
-        // delta1 < 0  -> this contract owes currency1 to pool (user input)
         // forge-lint: disable-next-line(unsafe-typecast)
         uint256 outAmount = delta0 > 0 ? uint256(uint128(delta0)) : 0;
-        // forge-lint: disable-next-line(unsafe-typecast)
-        uint256 inAmount = delta1 < 0 ? uint256(uint128(-delta1)) : 0;
 
         if (outAmount < amountOutMinimum) revert TooLittleReceived(amountOutMinimum, outAmount);
-
-        emit TakerOrderExecuted(_getLocker(), UnibuyPoolId.unwrap(poolKey.toId()), inAmount, outAmount, 0);
-        return abi.encode(outAmount);
     }
 
     /// @dev Executes a multi-hop exact-input taker swap.
     /// @param params abi.encode(UnibuyPoolKey[] path, uint256 amountIn, uint256 amountOutMinimum)
-    /// @return abi.encode(uint256 amountOut)
-    function _handleTakeOrderInput(bytes calldata params) internal returns (bytes memory) {
+    function _handleTakeOrderInput(bytes calldata params) internal {
         (UnibuyPoolKey[] memory path, uint256 amountIn, uint256 amountOutMinimum) =
             abi.decode(params, (UnibuyPoolKey[], uint256, uint256));
 
@@ -451,7 +416,7 @@ contract UnibuyOrderManager is
 
         uint256 currentAmount = amountIn;
         for (uint256 i = 0; i < path.length; i++) {
-            (int128 delta0, int128 delta1) =
+            (int128 delta0,) =
                 // forge-lint: disable-next-line(unsafe-typecast)
                 poolManager.takeOrder(path[i], -int256(currentAmount), TickMath.MAX_SQRT_PRICE);
             // forge-lint: disable-next-line(unsafe-typecast)
@@ -459,39 +424,29 @@ contract UnibuyOrderManager is
         }
 
         if (currentAmount < amountOutMinimum) revert TooLittleReceived(amountOutMinimum, currentAmount);
-
-        emit TakerOrderExecuted(_getLocker(), UnibuyPoolId.unwrap(path[0].toId()), amountIn, currentAmount, 0);
-        return abi.encode(currentAmount);
     }
 
     /// @dev Executes a single-pool exact-output taker swap.
     /// @param params abi.encode(UnibuyPoolKey poolKey, uint256 amountOut, uint256 amountInMaximum, uint160 sqrtPriceLimitX96)
-    /// @return abi.encode(uint256 amountIn)
-    function _handleTakeOrderOutputSingle(bytes calldata params) internal returns (bytes memory) {
+    function _handleTakeOrderOutputSingle(bytes calldata params) internal {
         (UnibuyPoolKey calldata poolKey, uint256 amountOut, uint256 amountInMaximum, uint160 sqrtPriceLimitX96) =
             params.decodeTakeOrderOutputSingleParams();
 
         if (amountOut == 0) revert ZeroAmount();
 
-        (int128 delta0, int128 delta1) =
+        (, int128 delta1) =
             // forge-lint: disable-next-line(unsafe-typecast)
             poolManager.takeOrder(poolKey, int256(amountOut), sqrtPriceLimitX96);
 
         // forge-lint: disable-next-line(unsafe-typecast)
-        uint256 outAmount = delta0 > 0 ? uint256(uint128(delta0)) : 0;
-        // forge-lint: disable-next-line(unsafe-typecast)
         uint256 inAmount  = delta1 < 0 ? uint256(uint128(-delta1)) : 0;
 
         if (inAmount > amountInMaximum) revert TooMuchRequested(amountInMaximum, inAmount);
-
-        emit TakerOrderExecuted(_getLocker(), UnibuyPoolId.unwrap(poolKey.toId()), inAmount, outAmount, 0);
-        return abi.encode(inAmount);
     }
 
     /// @dev Executes a multi-hop exact-output taker swap (reversed path traversal).
     /// @param params abi.encode(UnibuyPoolKey[] path, uint256 amountOut, uint256 amountInMaximum)
-    /// @return abi.encode(uint256 amountIn)
-    function _handleTakeOrderOutput(bytes calldata params) internal returns (bytes memory) {
+    function _handleTakeOrderOutput(bytes calldata params) internal {
         (UnibuyPoolKey[] memory path, uint256 amountOut, uint256 amountInMaximum) =
             abi.decode(params, (UnibuyPoolKey[], uint256, uint256));
 
@@ -502,7 +457,7 @@ contract UnibuyOrderManager is
         uint256 currentAmount = amountOut;
         for (uint256 i = path.length; i > 0; ) {
             unchecked { --i; }
-            (int128 delta0, int128 delta1) =
+            (, int128 delta1) =
                 // forge-lint: disable-next-line(unsafe-typecast)
                 poolManager.takeOrder(path[i], int256(currentAmount), TickMath.MAX_SQRT_PRICE);
             // forge-lint: disable-next-line(unsafe-typecast)
@@ -510,9 +465,6 @@ contract UnibuyOrderManager is
         }
 
         if (currentAmount > amountInMaximum) revert TooMuchRequested(amountInMaximum, currentAmount);
-
-        emit TakerOrderExecuted(_getLocker(), UnibuyPoolId.unwrap(path[0].toId()), currentAmount, amountOut, 0);
-        return abi.encode(currentAmount);
     }
 
     /// @dev Places a maker limit order. The resolved pool key and pool-term ticks are
@@ -522,8 +474,7 @@ contract UnibuyOrderManager is
     ///                          uint128 liquidity, address recipient)
     ///              poolKey: already the resolved pool (wrapper handles forward/mirror selection)
     ///              ticks: already in resolved-pool terms (wrapper provides resolved values)
-    /// @return abi.encode(uint256 tokenId, uint96 compensation)
-    function _handleMaker(bytes calldata params) internal returns (bytes memory) {
+    function _handleMaker(bytes calldata params) internal {
         (
             UnibuyPoolKey calldata poolKey,
             int24 tickLower,
@@ -533,8 +484,7 @@ contract UnibuyOrderManager is
         ) = params.decodePlaceMakerParams();
 
         uint256 tokenId = nextTokenId++;
-        (, uint96 compensation) =
-            poolManager.placeOrder(poolKey, tickLower, tickUpper, liquidity, bytes32(tokenId));
+        poolManager.placeOrder(poolKey, tickLower, tickUpper, liquidity, bytes32(tokenId));
 
         // Mint the NFT to the recipient and record the order
         _mint(recipient, tokenId);
@@ -547,17 +497,7 @@ contract UnibuyOrderManager is
 
         _orders[tokenId] = OrderInfoLibrary.initialize(poolId, tickLower, tickUpper);
 
-        emit MakerOrderPlaced(
-            _getLocker(),
-            UnibuyPoolId.unwrap(poolKey.toId()),
-            tokenId,
-            tickLower,
-            tickUpper,
-            compensation
-        );
-
         // Deposit delta accumulates; SETTLE_ALL handles payment.
-        return abi.encode(tokenId, compensation);
     }
 
     /// @dev Closes a maker order. Contains all business logic (auth check, storage lookup/update,
@@ -565,8 +505,7 @@ contract UnibuyOrderManager is
     ///      Direction (buy vs sell) is derived by comparing ord.poolId to key.toId().
     /// @param params abi.encode(UnibuyPoolKey key, uint256 tokenId)
     ///              key is the FORWARD pool key; used to derive order direction.
-    /// @return abi.encode(uint256 token0Amount, uint256 token1Amount)
-    function _handleClose(bytes calldata params) internal returns (bytes memory) {
+    function _handleClose(bytes calldata params) internal {
         (UnibuyPoolKey calldata key, uint256 tid) = params.decodeCloseMakerParams();
 
         address caller = _getLocker();
@@ -582,33 +521,10 @@ contract UnibuyOrderManager is
         int24 tickUpper = orderInfo.tickUpper();
 
         UnibuyPoolKey memory poolKey = isMirrorOrder ? key.mirrorKey() : key;
-        (int128 delta0, int128 delta1) =
-            poolManager.closeOrder(poolKey, tickLower, tickUpper, bytes32(tid));
-
-        // forge-lint: disable-next-line(unsafe-typecast)
-        uint256 d0 = delta0 > 0 ? uint256(uint128(delta0)) : 0;
-        // forge-lint: disable-next-line(unsafe-typecast)
-        uint256 d1 = delta1 > 0 ? uint256(uint128(delta1)) : 0;
-
-        // Map pool deltas → forward token0 / token1 for the return value.
-        // Credits accumulate; TAKE_PAIR handles the actual transfer.
-        uint256 token0Amount;
-        uint256 token1Amount;
-        if (isMirrorOrder) {
-            // Mirror pool: currency0 = fwd token1, currency1 = fwd token0
-            token1Amount = d0;
-            token0Amount = d1;
-        } else {
-            // Forward pool: currency0 = token0, currency1 = token1
-            token0Amount = d0;
-            token1Amount = d1;
-        }
+        poolManager.closeOrder(poolKey, tickLower, tickUpper, bytes32(tid));
 
         _orders[tid] = orderInfo.setInactive();
         _burn(tid);
-
-        emit MakerOrderClosed(caller, tid, token0Amount, token1Amount);
-        return abi.encode(token0Amount, token1Amount);
     }
 
     // ─────────────────────────────────────────────────────────────────────────
@@ -617,56 +533,50 @@ contract UnibuyOrderManager is
 
     /// @dev Settle an explicit amount.
     /// @param params abi.encode(Currency currency, uint256 amount, bool payerIsUser)
-    function _handleSettle(bytes calldata params) internal returns (bytes memory) {
+    function _handleSettle(bytes calldata params) internal {
         (Currency currency, uint256 amount, bool payerIsUser) = params.decodeSettleParams();
         address payer = payerIsUser ? _getLocker() : address(this);
         _settle(currency, payer, amount);
-        return "";
     }
 
     /// @dev Settle the full outstanding debt for a currency.
     /// @param params abi.encode(Currency currency)
-    function _handleSettleAll(bytes calldata params) internal returns (bytes memory) {
+    function _handleSettleAll(bytes calldata params) internal {
         Currency currency = params.decodeCurrency();
         uint256 amount = _getFullDebt(currency);
         _settle(currency, _getLocker(), amount);
-        return "";
     }
 
     /// @dev Transfer an explicit amount of a currency out.
     /// @param params abi.encode(Currency currency, address recipient, uint256 amount)
-    function _handleTake(bytes calldata params) internal returns (bytes memory) {
+    function _handleTake(bytes calldata params) internal {
         (Currency currency, address recipient, uint256 amount) = params.decodeTakeParams();
         _take(currency, recipient, amount);
-        return "";
     }
 
     /// @dev Transfer the full credit of a currency to a recipient.
     /// @param params abi.encode(Currency currency, address recipient)
-    function _handleTakeAll(bytes calldata params) internal returns (bytes memory) {
+    function _handleTakeAll(bytes calldata params) internal {
         (Currency currency, address recipient) = params.decodeCurrencyAddress();
         uint256 amount = _getFullCredit(currency);
         _take(currency, recipient, amount);
-        return "";
     }
 
     /// @dev Settle the full debt for both currencies in a pair.
     /// @param params abi.encode(Currency currency0, Currency currency1)
-    function _handleSettlePair(bytes calldata params) internal returns (bytes memory) {
+    function _handleSettlePair(bytes calldata params) internal {
         (Currency currency0, Currency currency1) = params.decodeCurrencyPair();
         address payer = _getLocker();
         _settle(currency0, payer, _getFullDebt(currency0));
         _settle(currency1, payer, _getFullDebt(currency1));
-        return "";
     }
 
     /// @dev Transfer the full credit for both currencies in a pair to a recipient.
     /// @param params abi.encode(Currency currency0, Currency currency1, address recipient)
-    function _handleTakePair(bytes calldata params) internal returns (bytes memory) {
+    function _handleTakePair(bytes calldata params) internal {
         (Currency currency0, Currency currency1, address recipient) = params.decodeTakePairParams();
         _take(currency0, recipient, _getFullCredit(currency0));
         _take(currency1, recipient, _getFullCredit(currency1));
-        return "";
     }
 
     // ─────────────────────────────────────────────────────────────────────────

@@ -30,51 +30,54 @@ contract MixedOrderTest is OrderManagerTestBase {
 
         uint256 token1Amount = 1e15;
         uint160 priceLimit   = TickMath.getSqrtPriceAtTick(TU);
+        uint256 nextId = orderManager.nextTokenId();
 
+        uint256 token0Before = tokenA.balanceOf(dave);
+        uint256 token1Before = tokenB.balanceOf(dave);
         tokenB.mint(dave, token1Amount);
         vm.prank(dave);
-        (uint256 t1Spent, uint256 t0Out, uint256 makerTid) = orderManager.mixedOrder(
+        orderManager.mixedOrder(
             poolKey,
-            token1Amount,   // taker token1 in
+            token1Amount,
             priceLimit,
             mirrorKey,
-            0,              // makerTickLower — skip maker
-            0,              // makerTickUpper
-            0,              // makerLiquidity = 0 → no maker
+            0,
+            0,
+            0,
             dave,
             block.timestamp + 1 hours
         );
 
-        assertGt(t0Out,   0, "should have received token0");
-        assertGt(t1Spent, 0, "should have spent token1");
-        assertEq(makerTid, 0, "no maker tokenId expected");
+        assertGt(tokenA.balanceOf(dave) - token0Before, 0, "should have received token0");
+        assertGt(token1Before + token1Amount - tokenB.balanceOf(dave), 0, "should have spent token1");
+        assertEq(orderManager.nextTokenId(), nextId, "no maker should not mint NFT");
     }
 
     function test_mixedBuy_makerOnlyWhenTakerZero() public {
         uint256 nextId = orderManager.nextTokenId();
 
+        uint256 token0Before = tokenA.balanceOf(dave);
+        uint256 token1Before = tokenB.balanceOf(dave);
         tokenB.mint(dave, 10e18);
         vm.prank(dave);
-        // Taker token1 = 0, only place maker in mirror pool.
-        // buy order: forward ticks [-TU, -TL] (below current price 0)
-        (uint256 t1Spent, uint256 t0Out, uint256 makerTid) = orderManager.mixedOrder(
+        orderManager.mixedOrder(
             poolKey,
-            0,              // no taker
+            0,
             0,
             mirrorKey,
-            TL,             // makerTickLower (mirror terms)
-            TU,             // makerTickUpper (mirror terms)
+            TL,
+            TU,
             LIQ,
             dave,
             block.timestamp + 1 hours
         );
 
-        assertEq(t0Out,   0,      "no taker, no token0 out");
-        assertEq(t1Spent, 0,      "no taker, no token1 spent");
-        assertEq(makerTid, nextId, "maker tokenId should be nextId");
-        assertEq(orderManager.ownerOf(makerTid), dave, "dave should own maker NFT");
+        assertEq(tokenA.balanceOf(dave), token0Before, "no taker, no token0 out");
+        assertLt(tokenB.balanceOf(dave), token1Before + 10e18, "maker should deposit token1");
+        assertEq(orderManager.nextTokenId(), nextId + 1, "maker tokenId should be nextId");
+        assertEq(orderManager.ownerOf(nextId), dave, "dave should own maker NFT");
 
-        IUnibuyOrderManager.OrderInfo memory rec = orderManager.getMakerOrder(makerTid);
+        IUnibuyOrderManager.OrderInfo memory rec = orderManager.getMakerOrder(nextId);
         assertEq(rec.poolId, bytes25(UnibuyPoolId.unwrap(mirrorKey.toId())), "should be mirror pool (buy order)");
         assertTrue(rec.active,     "should be active");
     }
@@ -84,29 +87,29 @@ contract MixedOrderTest is OrderManagerTestBase {
 
         uint256 nextId = orderManager.nextTokenId();
 
+        uint256 token0Before = tokenA.balanceOf(dave);
+        uint256 token1Before = tokenB.balanceOf(dave);
         tokenB.mint(dave, 10e18);
         vm.prank(dave);
-        (uint256 t1Spent, uint256 t0Out, uint256 makerTid) = orderManager.mixedOrder(
+        orderManager.mixedOrder(
             poolKey,
-            1e15,           // taker: spend 1e15 token1 immediately
+            1e15,
             TickMath.getSqrtPriceAtTick(TU),
             mirrorKey,
-            TL,             // maker: place buy order in mirror pool
+            TL,
             TU,
             LIQ,
             dave,
             block.timestamp + 1 hours
         );
 
-        // Taker part
-        assertGt(t0Out,   0, "should receive token0 from taker step");
-        assertGt(t1Spent, 0, "should spend token1 on taker step");
+        assertGt(tokenA.balanceOf(dave) - token0Before, 0, "should receive token0 from taker step");
+        assertGt(token1Before + 10e18 - tokenB.balanceOf(dave), 0, "should spend token1 on taker step");
 
-        // Maker part
-        assertEq(makerTid, nextId, "maker tokenId incremented");
-        assertEq(orderManager.ownerOf(makerTid), dave, "dave should own maker NFT");
+        assertEq(orderManager.nextTokenId(), nextId + 1, "maker tokenId incremented");
+        assertEq(orderManager.ownerOf(nextId), dave, "dave should own maker NFT");
 
-        IUnibuyOrderManager.OrderInfo memory rec = orderManager.getMakerOrder(makerTid);
+        IUnibuyOrderManager.OrderInfo memory rec = orderManager.getMakerOrder(nextId);
         assertEq(rec.poolId, bytes25(UnibuyPoolId.unwrap(mirrorKey.toId())), "should be mirror pool (buy order)");
     }
 
@@ -150,48 +153,51 @@ contract MixedOrderTest is OrderManagerTestBase {
         _setupBuyLiquidity();
 
         uint256 token0Amount = 1e15;
+        uint256 token0Before = tokenA.balanceOf(dave);
+        uint256 token1Before = tokenB.balanceOf(dave);
         tokenA.mint(dave, token0Amount);
         vm.prank(dave);
-        (uint256 t0Spent, uint256 t1Out, uint256 makerTid) = orderManager.mixedOrder(
+        orderManager.mixedOrder(
             mirrorKey,
-            token0Amount,   // taker: sell this much token0 immediately
-            1,              // no min price
+            token0Amount,
+            1,
             poolKey,
-            0,              // no maker
+            0,
             0,
             0,
             dave,
             block.timestamp + 1 hours
         );
 
-        assertGt(t0Spent, 0, "should have spent token0");
-        assertGt(t1Out,   0, "should have received token1");
-        assertEq(makerTid, 0, "no maker tokenId expected");
+        assertGt(token0Before + token0Amount - tokenA.balanceOf(dave), 0, "should have spent token0");
+        assertGt(tokenB.balanceOf(dave) - token1Before, 0, "should have received token1");
     }
 
     function test_mixedSell_makerOnlyWhenTakerZero() public {
         uint256 nextId = orderManager.nextTokenId();
 
+        uint256 token0Before = tokenA.balanceOf(dave);
+        uint256 token1Before = tokenB.balanceOf(dave);
         tokenA.mint(dave, 10e18);
         vm.prank(dave);
-        (uint256 t0Spent, uint256 t1Out, uint256 makerTid) = orderManager.mixedOrder(
+        orderManager.mixedOrder(
             mirrorKey,
-            0,              // no taker
+            0,
             1,
             poolKey,
-            TL,             // maker: place sell order from TL to TU
+            TL,
             TU,
             LIQ,
             dave,
             block.timestamp + 1 hours
         );
 
-        assertEq(t0Spent, 0,      "no taker, no token0 spent");
-        assertEq(t1Out,   0,      "no taker, no token1 out");
-        assertEq(makerTid, nextId, "maker tokenId incremented");
-        assertEq(orderManager.ownerOf(makerTid), dave);
+        assertGt(token0Before + 10e18 - tokenA.balanceOf(dave), 0, "maker should spend token0");
+        assertEq(tokenB.balanceOf(dave), token1Before, "maker should not touch token1");
+        assertEq(orderManager.nextTokenId(), nextId + 1, "maker tokenId incremented");
+        assertEq(orderManager.ownerOf(nextId), dave);
 
-        IUnibuyOrderManager.OrderInfo memory rec = orderManager.getMakerOrder(makerTid);
+        IUnibuyOrderManager.OrderInfo memory rec = orderManager.getMakerOrder(nextId);
         assertEq(rec.poolId, bytes25(UnibuyPoolId.unwrap(poolKey.toId())), "should be forward pool (sell order)");
         assertTrue(rec.active,      "should be active");
     }
@@ -201,27 +207,27 @@ contract MixedOrderTest is OrderManagerTestBase {
 
         uint256 nextId = orderManager.nextTokenId();
 
+        uint256 token0Before = tokenA.balanceOf(dave);
+        uint256 token1Before = tokenB.balanceOf(dave);
         tokenA.mint(dave, 10e18);
         vm.prank(dave);
-        (uint256 t0Spent, uint256 t1Out, uint256 makerTid) = orderManager.mixedOrder(
+        orderManager.mixedOrder(
             mirrorKey,
-            1e15,           // taker: sell 1e15 token0 immediately
+            1e15,
             1,
             poolKey,
-            TL,             // maker: place sell order
+            TL,
             TU,
             LIQ,
             dave,
             block.timestamp + 1 hours
         );
 
-        // Taker part
-        assertGt(t0Spent, 0, "should spend token0 on taker step");
-        assertGt(t1Out,   0, "should receive token1 from taker step");
+        assertGt(token0Before + 10e18 - tokenA.balanceOf(dave), 0, "should spend token0 on taker step");
+        assertGt(tokenB.balanceOf(dave) - token1Before, 0, "should receive token1 from taker step");
 
-        // Maker part
-        assertEq(makerTid, nextId, "maker tokenId incremented");
-        assertEq(orderManager.ownerOf(makerTid), dave);
+        assertEq(orderManager.nextTokenId(), nextId + 1, "maker tokenId incremented");
+        assertEq(orderManager.ownerOf(nextId), dave);
     }
 
     function test_mixedSell_revert_sellPriceAboveCurrent() public {
@@ -258,41 +264,23 @@ contract MixedOrderTest is OrderManagerTestBase {
     function test_mixedBuy_closeMakerAfter() public {
         uint256 token1Amount = 1e15;
         tokenB.mint(dave, 10e18);
+        uint256 nextId = orderManager.nextTokenId();
         vm.prank(dave);
-        (,, uint256 makerTid) = orderManager.mixedOrder(
-            poolKey,
-            token1Amount,
-            TickMath.getSqrtPriceAtTick(TU),
-            mirrorKey,
-            TL,
-            TU,
-            LIQ,
-            dave,
-            block.timestamp + 1 hours
-        );
+        orderManager.mixedOrder(poolKey, token1Amount, TickMath.getSqrtPriceAtTick(TU), mirrorKey, TL, TU, LIQ, dave, block.timestamp + 1 hours);
 
         // Close the maker portion
-        ( , uint256 t1Back) = _closeOrder(dave, makerTid);
+        ( , uint256 t1Back) = _closeOrder(dave, nextId);
         // No fill yet on buy order, so all token1 refunded
         assertGe(t1Back, 0, "token1 refund expected");
     }
 
     function test_mixedSell_closeMakerAfter() public {
         tokenA.mint(dave, 10e18);
+        uint256 nextId = orderManager.nextTokenId();
         vm.prank(dave);
-        (,, uint256 makerTid) = orderManager.mixedOrder(
-            mirrorKey,
-            0,   // no taker
-            1,
-            poolKey,
-            TL,
-            TU,
-            LIQ,
-            dave,
-            block.timestamp + 1 hours
-        );
+        orderManager.mixedOrder(mirrorKey, 0, 1, poolKey, TL, TU, LIQ, dave, block.timestamp + 1 hours);
 
-        (uint256 t0Back,) = _closeOrder(dave, makerTid);
+        (uint256 t0Back,) = _closeOrder(dave, nextId);
         assertGt(t0Back, 0, "should get token0 back from unfilled sell order");
     }
 }

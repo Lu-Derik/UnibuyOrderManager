@@ -49,9 +49,10 @@ contract TakerOrderTest is OrderManagerTestBase {
 
         // Pre-fund extra token1 approval
         tokenB.mint(dave, 10e18);
+        uint256 t1Before = tokenB.balanceOf(dave);
 
         vm.prank(dave);
-        uint256 t1In = orderManager.takeOrderOutputSingle(
+        orderManager.takeOrderOutputSingle(
             poolKey,
             dave,
             token0Want,        // exact amountOut
@@ -59,6 +60,7 @@ contract TakerOrderTest is OrderManagerTestBase {
             priceLimit,
             block.timestamp + 1 hours
         );
+        uint256 t1In = t1Before - tokenB.balanceOf(dave);
         uint256 t0Out = token0Want; // exact output
 
         // With exact output, t0Out should equal the requested amount
@@ -162,9 +164,10 @@ contract TakerOrderTest is OrderManagerTestBase {
 
         uint256 token1Want = 5e14;
         tokenA.mint(dave, 10e18); // extra collateral
+        uint256 t0Before = tokenA.balanceOf(dave);
 
         vm.prank(dave);
-        uint256 t0In = orderManager.takeOrderOutputSingle(
+        orderManager.takeOrderOutputSingle(
             mirrorKey,
             dave,
             token1Want,        // exact amountOut
@@ -173,6 +176,7 @@ contract TakerOrderTest is OrderManagerTestBase {
             block.timestamp + 1 hours
         );
         uint256 t1Out = token1Want; // exact output
+        uint256 t0In = t0Before - tokenA.balanceOf(dave);
 
         assertEq(t1Out, token1Want, "exact token1 output not matched");
         assertGt(t0In,  0,         "should have spent token0");
@@ -232,11 +236,13 @@ contract TakerOrderTest is OrderManagerTestBase {
 
         // Measure actual output via snapshot
         tokenB.mint(dave, amountIn);
+        uint256 outBefore = tokenA.balanceOf(dave);
         uint256 snap = vm.snapshot();
         vm.prank(dave);
-        uint256 actualOut = orderManager.takeOrderInputSingle(
+        orderManager.takeOrderInputSingle(
             poolKey, dave, amountIn, 0, priceLimit, block.timestamp + 1 hours
         );
+        uint256 actualOut = tokenA.balanceOf(dave) - outBefore;
         vm.revertTo(snap);
 
         // Re-fund and call with minimum = actualOut + 1 — must revert
@@ -263,11 +269,13 @@ contract TakerOrderTest is OrderManagerTestBase {
         uint160 priceLimit = TickMath.getSqrtPriceAtTick(TU);
         tokenB.mint(dave, 10e18);
 
+        uint256 t1Before = tokenB.balanceOf(dave);
         uint256 aBeforeDave = tokenA.balanceOf(dave);
         vm.prank(dave);
-        uint256 t1In = orderManager.takeOrderOutputSingle(
+        orderManager.takeOrderOutputSingle(
             poolKey, dave, token0Want, type(uint256).max, priceLimit, block.timestamp + 1 hours
         );
+        uint256 t1In = t1Before - tokenB.balanceOf(dave);
         uint256 t0Out = token0Want; // exact output
 
         assertEq(t0Out, token0Want, "exact token0 output not matched");
@@ -281,11 +289,13 @@ contract TakerOrderTest is OrderManagerTestBase {
         tokenB.mint(dave, 10e18);
 
         // Measure actual input via snapshot
+        uint256 inBefore = tokenB.balanceOf(dave);
         uint256 snap = vm.snapshot();
         vm.prank(dave);
-        uint256 actualIn = orderManager.takeOrderOutputSingle(
+        orderManager.takeOrderOutputSingle(
             poolKey, dave, token0Want, type(uint256).max, priceLimit, block.timestamp + 1 hours
         );
+        uint256 actualIn = inBefore - tokenB.balanceOf(dave);
         vm.revertTo(snap);
 
         // Re-fund and call with maximum = actualIn - 1 — must revert
@@ -346,9 +356,10 @@ contract TakerOrderTest is OrderManagerTestBase {
 
         uint256 cBefore = tokenC.balanceOf(dave);
         vm.prank(dave);
-        uint256 actualOut = orderManager.takeOrderInput(
+        orderManager.takeOrderInput(
             path, dave, amountIn, 0, block.timestamp + 1 hours
         );
+        uint256 actualOut = tokenC.balanceOf(dave) - cBefore;
         uint256 actualIn = amountIn; // exact-input: full amount spent
 
         assertEq(actualIn,  amountIn, "should spend exact amountIn");
@@ -357,17 +368,19 @@ contract TakerOrderTest is OrderManagerTestBase {
     }
 
     function test_takeOrderInput_slippageRevert() public {
-        (, , UnibuyPoolKey[] memory path) = _setup2HopPath();
+        (TestERC20 tokenC, , UnibuyPoolKey[] memory path) = _setup2HopPath();
 
         uint256 amountIn = 1e15;
         tokenB.mint(dave, amountIn);
 
         // Measure actual output via snapshot
+        uint256 cBefore = tokenC.balanceOf(dave);
         uint256 snap = vm.snapshot();
         vm.prank(dave);
-        uint256 actualOut = orderManager.takeOrderInput(
+        orderManager.takeOrderInput(
             path, dave, amountIn, 0, block.timestamp + 1 hours
         );
+        uint256 actualOut = tokenC.balanceOf(dave) - cBefore;
         vm.revertTo(snap);
 
         tokenB.mint(dave, amountIn);
@@ -394,11 +407,13 @@ contract TakerOrderTest is OrderManagerTestBase {
         vm.prank(dave);
         tokenC.approve(address(orderManager), type(uint256).max);
 
+        uint256 inBefore = tokenB.balanceOf(dave);
         uint256 cBefore = tokenC.balanceOf(dave);
         vm.prank(dave);
-        uint256 actualIn = orderManager.takeOrderOutput(
+        orderManager.takeOrderOutput(
             path, dave, amountOut, type(uint256).max, block.timestamp + 1 hours
         );
+        uint256 actualIn = inBefore - tokenB.balanceOf(dave);
         uint256 actualOut = amountOut; // exact output
 
         assertEq(actualOut, amountOut, "should receive exact tokenC");
@@ -413,11 +428,13 @@ contract TakerOrderTest is OrderManagerTestBase {
         tokenB.mint(dave, 10e18);
 
         // Measure actual input via snapshot
+        uint256 inBefore = tokenB.balanceOf(dave);
         uint256 snap = vm.snapshot();
         vm.prank(dave);
-        uint256 actualIn = orderManager.takeOrderOutput(
+        orderManager.takeOrderOutput(
             path, dave, amountOut, type(uint256).max, block.timestamp + 1 hours
         );
+        uint256 actualIn = inBefore - tokenB.balanceOf(dave);
         vm.revertTo(snap);
 
         tokenB.mint(dave, 10e18);

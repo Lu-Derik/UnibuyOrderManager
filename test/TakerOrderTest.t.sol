@@ -3,6 +3,9 @@ pragma solidity ^0.8.26;
 
 import {OrderManagerTestBase} from "./helpers/OrderManagerTestBase.t.sol";
 import {TickMath}             from "@unibuy/libraries/TickMath.sol";
+import {UnibuyPoolKey}        from "@unibuy/types/UnibuyPoolKey.sol";
+import {Currency}             from "@unibuy/types/Currency.sol";
+import {TestERC20}            from "./helpers/TestERC20.sol";
 
 /// @title TakerOrderTest
 /// @notice Tests for takerBuy and takerSell functionality of UnibuyOrderManager.
@@ -32,7 +35,7 @@ contract TakerOrderTest is OrderManagerTestBase {
         uint256 token0Before = tokenA.balanceOf(dave);
         uint256 token1Before = tokenB.balanceOf(dave);
 
-        (uint256 t0Out, uint256 t1In,) = _takerBuy(dave, token1Amount, priceLimit);
+        (uint256 t0Out, uint256 t1In) = _takerBuy(dave, token1Amount, priceLimit);
 
         assertGt(t0Out, 0, "should receive token0");
         assertGt(t1In,  0, "should spend token1");
@@ -48,14 +51,15 @@ contract TakerOrderTest is OrderManagerTestBase {
         tokenB.mint(dave, 10e18);
 
         vm.prank(dave);
-        (uint256 t1In, uint256 t0Out,) = orderManager.takeOrder(
+        uint256 t1In = orderManager.takeOrderOutputSingle(
             poolKey,
-            false,       // exactOutput
-            token0Want,
-            priceLimit,
             dave,
+            token0Want,        // exact amountOut
+            type(uint256).max, // amountInMaximum — no limit
+            priceLimit,
             block.timestamp + 1 hours
         );
+        uint256 t0Out = token0Want; // exact output
 
         // With exact output, t0Out should equal the requested amount
         assertEq(t0Out, token0Want, "exact token0 output not matched");
@@ -94,22 +98,22 @@ contract TakerOrderTest is OrderManagerTestBase {
                 currentSqrt
             )
         );
-        orderManager.takeOrder(poolKey, true, 1e18, badLimit, dave, block.timestamp + 1 hours);
+        orderManager.takeOrderInputSingle(poolKey, dave, 1e18, 0, badLimit, block.timestamp + 1 hours);
     }
 
     function test_takerBuy_revert_zeroAmount() public {
         vm.prank(dave);
         vm.expectRevert(abi.encodeWithSelector(bytes4(keccak256("ZeroAmount()"))));
-        orderManager.takeOrder(
-            poolKey, true, 0, TickMath.getSqrtPriceAtTick(TU), dave, block.timestamp + 1 hours
+        orderManager.takeOrderInputSingle(
+            poolKey, dave, 0, 0, TickMath.getSqrtPriceAtTick(TU), block.timestamp + 1 hours
         );
     }
 
     function test_takerBuy_revert_deadlinePassed() public {
         vm.prank(dave);
         vm.expectRevert(abi.encodeWithSelector(bytes4(keccak256("DeadlinePassed()"))));
-        orderManager.takeOrder(
-            poolKey, true, 1e15, TickMath.getSqrtPriceAtTick(TU), dave, block.timestamp - 1
+        orderManager.takeOrderInputSingle(
+            poolKey, dave, 1e15, 0, TickMath.getSqrtPriceAtTick(TU), block.timestamp - 1
         );
     }
 
@@ -127,7 +131,7 @@ contract TakerOrderTest is OrderManagerTestBase {
     /// @dev For takerSell, we first need liquidity in the MIRROR pool.
     ///      Alice places a buy maker order (which puts tokenB into mirror pool).
     function _setupMirrorLiquidity() internal {
-        // Mirror pool: sell tokenB (currencyIn) for tokenA.
+        // Mirror pool: sell tokenB (currency0) for tokenA.
         // Place buy maker order with forward ticks [-TU, -TL] = [-180, -60].
         // Internally converted: mirrorTickLower = -(-TL) = TL = 60,
         //                        mirrorTickUpper = -(-TU) = TU = 180
@@ -145,7 +149,7 @@ contract TakerOrderTest is OrderManagerTestBase {
         uint256 t1BeforeDave = tokenB.balanceOf(dave);
 
         // Sell with no price limit (accept any price)
-        (uint256 t0In, uint256 t1Out,) = _takerSell(dave, token0Amount, 1);
+        (uint256 t0In, uint256 t1Out) = _takerSell(dave, token0Amount, 1);
 
         assertGt(t0In,  0, "should have spent token0");
         assertGt(t1Out, 0, "should have received token1");
@@ -160,14 +164,15 @@ contract TakerOrderTest is OrderManagerTestBase {
         tokenA.mint(dave, 10e18); // extra collateral
 
         vm.prank(dave);
-        (uint256 t0In, uint256 t1Out,) = orderManager.takeOrder(
+        uint256 t0In = orderManager.takeOrderOutputSingle(
             mirrorKey,
-            false,       // exactOutput
-            token1Want,
-            TickMath.MAX_SQRT_PRICE,
             dave,
+            token1Want,        // exact amountOut
+            type(uint256).max, // amountInMaximum — no limit
+            TickMath.MAX_SQRT_PRICE,
             block.timestamp + 1 hours
         );
+        uint256 t1Out = token1Want; // exact output
 
         assertEq(t1Out, token1Want, "exact token1 output not matched");
         assertGt(t0In,  0,         "should have spent token0");
@@ -187,19 +192,19 @@ contract TakerOrderTest is OrderManagerTestBase {
                 currentSqrtMirror
             )
         );
-        orderManager.takeOrder(mirrorKey, true, 1e18, badLimit, dave, block.timestamp + 1 hours);
+        orderManager.takeOrderInputSingle(mirrorKey, dave, 1e18, 0, badLimit, block.timestamp + 1 hours);
     }
 
     function test_takerSell_revert_zeroAmount() public {
         vm.prank(dave);
         vm.expectRevert(abi.encodeWithSelector(bytes4(keccak256("ZeroAmount()"))));
-        orderManager.takeOrder(mirrorKey, true, 0, TickMath.MAX_SQRT_PRICE, dave, block.timestamp + 1 hours);
+        orderManager.takeOrderInputSingle(mirrorKey, dave, 0, 0, TickMath.MAX_SQRT_PRICE, block.timestamp + 1 hours);
     }
 
     function test_takerSell_revert_deadlinePassed() public {
         vm.prank(dave);
         vm.expectRevert(abi.encodeWithSelector(bytes4(keccak256("DeadlinePassed()"))));
-        orderManager.takeOrder(mirrorKey, true, 1e15, TickMath.MAX_SQRT_PRICE, dave, block.timestamp - 1);
+        orderManager.takeOrderInputSingle(mirrorKey, dave, 1e15, 0, TickMath.MAX_SQRT_PRICE, block.timestamp - 1);
     }
 
     // ─────────────────────────────────────────────────────────────────────────
@@ -215,5 +220,215 @@ contract TakerOrderTest is OrderManagerTestBase {
         (,, uint32 heightAfter) = _getSlot0Fwd();
 
         assertGt(heightAfter, heightBefore, "pool height should increase on tick crossings");
+    }
+
+    // ─────────────────────────────────────────────────────────────────────────
+    // takeOrderInputSingle — slippage guard
+    // ─────────────────────────────────────────────────────────────────────────
+
+    function test_takeOrderInputSingle_revert_tooLittleReceived() public {
+        uint256 amountIn  = 1e15;
+        uint160 priceLimit = TickMath.getSqrtPriceAtTick(TU);
+
+        // Measure actual output via snapshot
+        tokenB.mint(dave, amountIn);
+        uint256 snap = vm.snapshot();
+        vm.prank(dave);
+        uint256 actualOut = orderManager.takeOrderInputSingle(
+            poolKey, dave, amountIn, 0, priceLimit, block.timestamp + 1 hours
+        );
+        vm.revertTo(snap);
+
+        // Re-fund and call with minimum = actualOut + 1 — must revert
+        tokenB.mint(dave, amountIn);
+        vm.prank(dave);
+        vm.expectRevert(
+            abi.encodeWithSelector(
+                bytes4(keccak256("TooLittleReceived(uint256,uint256)")),
+                actualOut + 1,
+                actualOut
+            )
+        );
+        orderManager.takeOrderInputSingle(
+            poolKey, dave, amountIn, actualOut + 1, priceLimit, block.timestamp + 1 hours
+        );
+    }
+
+    // ─────────────────────────────────────────────────────────────────────────
+    // takeOrderOutputSingle — basic + slippage guard
+    // ─────────────────────────────────────────────────────────────────────────
+
+    function test_takeOrderOutputSingle_receivesExactToken0() public {
+        uint256 token0Want = 5e14;
+        uint160 priceLimit = TickMath.getSqrtPriceAtTick(TU);
+        tokenB.mint(dave, 10e18);
+
+        uint256 aBeforeDave = tokenA.balanceOf(dave);
+        vm.prank(dave);
+        uint256 t1In = orderManager.takeOrderOutputSingle(
+            poolKey, dave, token0Want, type(uint256).max, priceLimit, block.timestamp + 1 hours
+        );
+        uint256 t0Out = token0Want; // exact output
+
+        assertEq(t0Out, token0Want, "exact token0 output not matched");
+        assertGt(t1In,  0,         "should have spent token1");
+        assertEq(tokenA.balanceOf(dave), aBeforeDave + token0Want, "dave token0 balance mismatch");
+    }
+
+    function test_takeOrderOutputSingle_revert_tooMuchRequested() public {
+        uint256 token0Want = 5e14;
+        uint160 priceLimit = TickMath.getSqrtPriceAtTick(TU);
+        tokenB.mint(dave, 10e18);
+
+        // Measure actual input via snapshot
+        uint256 snap = vm.snapshot();
+        vm.prank(dave);
+        uint256 actualIn = orderManager.takeOrderOutputSingle(
+            poolKey, dave, token0Want, type(uint256).max, priceLimit, block.timestamp + 1 hours
+        );
+        vm.revertTo(snap);
+
+        // Re-fund and call with maximum = actualIn - 1 — must revert
+        tokenB.mint(dave, 10e18);
+        vm.prank(dave);
+        vm.expectRevert(
+            abi.encodeWithSelector(
+                bytes4(keccak256("TooMuchRequested(uint256,uint256)")),
+                actualIn - 1,
+                actualIn
+            )
+        );
+        orderManager.takeOrderOutputSingle(
+            poolKey, dave, token0Want, actualIn - 1, priceLimit, block.timestamp + 1 hours
+        );
+    }
+
+    // ─────────────────────────────────────────────────────────────────────────
+    // takeOrderInput (multi-hop)
+    // ─────────────────────────────────────────────────────────────────────────
+
+    /// @dev Set up a 2-hop path: pay tokenB → (via poolKey) → tokenA → (via zPool) → tokenC.
+    ///
+    ///   path[0] = poolKey  : currency0=tokenA,  currency1=tokenB  (pay tokenB, get tokenA)
+    ///   path[1] = zPool    : currency0=tokenC,  currency1=tokenA  (pay tokenA, get tokenC)
+    function _setup2HopPath()
+        internal
+        returns (TestERC20 tokenC, UnibuyPoolKey memory zPool, UnibuyPoolKey[] memory path)
+    {
+        tokenC = new TestERC20("Token C", "TKC", 18);
+        zPool = UnibuyPoolKey({
+            currency0: Currency.wrap(address(tokenC)),
+            currency1: Currency.wrap(address(tokenA)),
+            tickSpacing: TICK_SPACING
+        });
+        poolManager.initialize(zPool, SQRT_PRICE_1_1);
+
+        // Seed liquidity: alice deposits tokenC as maker in zPool
+        tokenC.mint(alice, 10_000_000 ether);
+        vm.prank(alice);
+        tokenC.approve(address(orderManager), type(uint256).max);
+        vm.prank(alice);
+        orderManager.placeOrder(zPool, TL, TU, LIQ, block.timestamp + 1 hours);
+
+        // Build path
+        path = new UnibuyPoolKey[](2);
+        path[0] = poolKey;  // currency0=tokenA, currency1=tokenB
+        path[1] = zPool;    // currency0=tokenC, currency1=tokenA
+    }
+
+    function test_takeOrderInput_multiHop_receivesTokenC() public {
+        (TestERC20 tokenC, , UnibuyPoolKey[] memory path) = _setup2HopPath();
+
+        uint256 amountIn = 1e15;
+        tokenB.mint(dave, amountIn);
+        vm.prank(dave);
+        tokenC.approve(address(orderManager), type(uint256).max);
+
+        uint256 cBefore = tokenC.balanceOf(dave);
+        vm.prank(dave);
+        uint256 actualOut = orderManager.takeOrderInput(
+            path, dave, amountIn, 0, block.timestamp + 1 hours
+        );
+        uint256 actualIn = amountIn; // exact-input: full amount spent
+
+        assertEq(actualIn,  amountIn, "should spend exact amountIn");
+        assertGt(actualOut, 0,        "should receive tokenC");
+        assertEq(tokenC.balanceOf(dave), cBefore + actualOut, "tokenC balance mismatch");
+    }
+
+    function test_takeOrderInput_slippageRevert() public {
+        (, , UnibuyPoolKey[] memory path) = _setup2HopPath();
+
+        uint256 amountIn = 1e15;
+        tokenB.mint(dave, amountIn);
+
+        // Measure actual output via snapshot
+        uint256 snap = vm.snapshot();
+        vm.prank(dave);
+        uint256 actualOut = orderManager.takeOrderInput(
+            path, dave, amountIn, 0, block.timestamp + 1 hours
+        );
+        vm.revertTo(snap);
+
+        tokenB.mint(dave, amountIn);
+        vm.prank(dave);
+        vm.expectRevert(
+            abi.encodeWithSelector(
+                bytes4(keccak256("TooLittleReceived(uint256,uint256)")),
+                actualOut + 1,
+                actualOut
+            )
+        );
+        orderManager.takeOrderInput(path, dave, amountIn, actualOut + 1, block.timestamp + 1 hours);
+    }
+
+    // ─────────────────────────────────────────────────────────────────────────
+    // takeOrderOutput (multi-hop)
+    // ─────────────────────────────────────────────────────────────────────────
+
+    function test_takeOrderOutput_multiHop_receivesExactTokenC() public {
+        (TestERC20 tokenC, , UnibuyPoolKey[] memory path) = _setup2HopPath();
+
+        uint256 amountOut = 5e14;
+        tokenB.mint(dave, 10e18);
+        vm.prank(dave);
+        tokenC.approve(address(orderManager), type(uint256).max);
+
+        uint256 cBefore = tokenC.balanceOf(dave);
+        vm.prank(dave);
+        uint256 actualIn = orderManager.takeOrderOutput(
+            path, dave, amountOut, type(uint256).max, block.timestamp + 1 hours
+        );
+        uint256 actualOut = amountOut; // exact output
+
+        assertEq(actualOut, amountOut, "should receive exact tokenC");
+        assertGt(actualIn,  0,        "should spend tokenB");
+        assertEq(tokenC.balanceOf(dave), cBefore + amountOut, "tokenC balance mismatch");
+    }
+
+    function test_takeOrderOutput_slippageRevert() public {
+        (, , UnibuyPoolKey[] memory path) = _setup2HopPath();
+
+        uint256 amountOut = 5e14;
+        tokenB.mint(dave, 10e18);
+
+        // Measure actual input via snapshot
+        uint256 snap = vm.snapshot();
+        vm.prank(dave);
+        uint256 actualIn = orderManager.takeOrderOutput(
+            path, dave, amountOut, type(uint256).max, block.timestamp + 1 hours
+        );
+        vm.revertTo(snap);
+
+        tokenB.mint(dave, 10e18);
+        vm.prank(dave);
+        vm.expectRevert(
+            abi.encodeWithSelector(
+                bytes4(keccak256("TooMuchRequested(uint256,uint256)")),
+                actualIn - 1,
+                actualIn
+            )
+        );
+        orderManager.takeOrderOutput(path, dave, amountOut, actualIn - 1, block.timestamp + 1 hours);
     }
 }

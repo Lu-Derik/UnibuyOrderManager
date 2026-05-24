@@ -91,8 +91,8 @@ contract ReentrantERC20 {
         if (attackType == AttackType.TAKER_ORDER) {
             (success, revertData) = address(target).call(
                 abi.encodeCall(
-                    target.takeOrder,
-                    (attackKey, true, 1, type(uint160).max, from, block.timestamp + 1 hours)
+                    target.takeOrderInputSingle,
+                    (attackKey, from, 1, 0, type(uint160).max, block.timestamp + 1 hours)
                 )
             );
         } else if (attackType == AttackType.PLACE_MAKER_ORDER) {
@@ -153,7 +153,7 @@ contract SecurityTest is OrderManagerTestBase {
     // Internal helpers
     // ─────────────────────────────────────────────────────────────────────────
 
-    /// @dev Deploy a pool whose currencyOut is a ReentrantERC20, place a sell
+    /// @dev Deploy a pool whose currency1 is a ReentrantERC20, place a sell
     ///      order to seed liquidity, then have `dave` call takerOrder to trigger
     ///      the reentrant hook.  Returns the malicious token so the caller can
     ///      inspect `reentrantCallReverted`.
@@ -163,10 +163,10 @@ contract SecurityTest is OrderManagerTestBase {
         // *any* orderManager entry-point to hit the ContractLocked check.
         mal.setTarget(orderManager, poolKey, at);
 
-        // Pool: currencyIn=tokenA  currencyOut=malToken
+        // Pool: currency0=tokenA  currency1=malToken
         UnibuyPoolKey memory malPool = UnibuyPoolKey({
-            currencyIn:  Currency.wrap(address(tokenA)),
-            currencyOut: Currency.wrap(address(mal)),
+            currency0:  Currency.wrap(address(tokenA)),
+            currency1: Currency.wrap(address(mal)),
             tickSpacing: TICK_SPACING
         });
 
@@ -188,12 +188,12 @@ contract SecurityTest is OrderManagerTestBase {
 
         // Dave buys tokenA by paying malToken — triggers transferFrom hook
         vm.prank(dave);
-        orderManager.takeOrder(
+        orderManager.takeOrderInputSingle(
             malPool,
-            true,              // exactInput
+            dave,              // recipient
             1e15,
+            0,                 // amountOutMinimum — no guard
             TickMath.getSqrtPriceAtTick(TU),
-            dave,
             block.timestamp + 1 hours
         );
     }
@@ -358,12 +358,12 @@ contract SecurityTest is OrderManagerTestBase {
     // ─────────────────────────────────────────────────────────────────────────
 
     /// @dev Taker pays native ETH → _settle must call poolManager.settle{value}.
-    ///      Pool layout: currencyIn=tokenA  currencyOut=ETH(address(0)).
+    ///      Pool layout: currency0=tokenA  currency1=ETH(address(0)).
     function test_fix4_nativeETH_takerOrder() public {
         // ── Setup: create a native-ETH pool ──────────────────────────────────
         UnibuyPoolKey memory nativePool = UnibuyPoolKey({
-            currencyIn:  Currency.wrap(address(tokenA)),
-            currencyOut: Currency.wrap(address(0)),   // native ETH
+            currency0:  Currency.wrap(address(tokenA)),
+            currency1: Currency.wrap(address(0)),   // native ETH
             tickSpacing: TICK_SPACING
         });
         poolManager.initialize(nativePool, SQRT_PRICE_1_1);
@@ -385,14 +385,15 @@ contract SecurityTest is OrderManagerTestBase {
         uint256 daveEthBefore  = address(dave).balance;
 
         vm.prank(dave);
-        (uint256 amtIn, uint256 amtOut,) = orderManager.takeOrder{value: ethAmount}(
+        uint256 amtOut = orderManager.takeOrderInputSingle{value: ethAmount}(
             nativePool,
-            true,              // exactInput
-            ethAmount,
-            TickMath.getSqrtPriceAtTick(TU),
             dave,
+            ethAmount,
+            0,                               // amountOutMinimum — no guard
+            TickMath.getSqrtPriceAtTick(TU),
             block.timestamp + 1 hours
         );
+        uint256 amtIn = ethAmount; // exact-input: full amount spent
 
         // ── Assertions ────────────────────────────────────────────────────────
         assertGt(amtOut, 0,                    "taker should receive tokenA");

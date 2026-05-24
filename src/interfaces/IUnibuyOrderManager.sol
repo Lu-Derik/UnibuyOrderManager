@@ -7,8 +7,8 @@ import {UnibuyPoolKey} from "@unibuy/types/UnibuyPoolKey.sol";
 /// @notice User-facing interface for the UniBuy order management contract.
 ///
 /// Terminology (from user perspective for a token pair A / B):
-///   • "token0" = currencyIn  of the forward pool key (the token makers deposit / takers receive).
-///   • "token1" = currencyOut of the forward pool key (the token takers pay    / makers receive).
+///   • "token0" = currency0 of the forward pool key (the token makers deposit / takers receive).
+///   • "token1" = currency1 of the forward pool key (the token takers pay    / makers receive).
 ///
 /// Tick and price parameters are expressed in the SAME pool-key terms passed to each method.
 /// Callers choose forward or mirror keys explicitly.
@@ -73,33 +73,84 @@ interface IUnibuyOrderManager {
     error ZeroAmount();
     error InvalidActionType(uint8 action);
     error InputLengthMismatch();
+    error TooLittleReceived(uint256 minAmountOut, uint256 actualAmountOut);
+    error TooMuchRequested(uint256 maxAmountIn, uint256 actualAmountIn);
 
     // ─────────────────────────────────────────────────────────────────────────
     // Taker order
     // ─────────────────────────────────────────────────────────────────────────
 
-    /// @notice Execute a taker order on the provided pool key.
+    /// @notice Execute a single-pool exact-input taker order.
     ///
-    /// @param key               Resolved pool key to trade against (forward or mirror).
-    /// @param exactInput        true  → `amount` is the exact input token amount.
-    ///                          false → `amount` is the exact output token amount.
-    /// @param amount            Token amount (> 0).
-    /// @param sqrtPriceLimitX96 Price limit in the SAME pool's sqrt terms (Q64.96).
-    ///                          Must be >= current pool sqrt price.
-    /// @param recipient         Address that receives the output token.
-    /// @param deadline          Block timestamp after which the call reverts.
+    /// @param key                Resolved pool key to trade against.
+    /// @param recipient          Address that receives the output token (currency0).
+    /// @param amountIn           Exact amount of currency1 to spend.
+    /// @param amountOutMinimum   Minimum amount of currency0 to receive (slippage guard).
+    /// @param sqrtPriceLimitX96  Price ceiling in sqrt Q64.96 terms; must be >= current price.
+    /// @param deadline           Block timestamp after which the call reverts.
     ///
-    /// @return amountIn   Actual input token spent by `msg.sender`.
-    /// @return amountOut  Actual output token delivered to `recipient`.
-    /// @return fee        Protocol fee paid.
-    function takeOrder(
+    /// @return amountOut  Actual currency0 delivered to recipient.
+    function takeOrderInputSingle(
         UnibuyPoolKey calldata key,
-        bool    exactInput,
-        uint256 amount,
-        uint160 sqrtPriceLimitX96,
         address recipient,
+        uint256 amountIn,
+        uint256 amountOutMinimum,
+        uint160 sqrtPriceLimitX96,
         uint256 deadline
-    ) external payable returns (uint256 amountIn, uint256 amountOut, uint256 fee);
+    ) external payable returns (uint256 amountOut);
+
+    /// @notice Execute a multi-hop exact-input taker order (path of pools).
+    ///
+    /// @param path               Ordered array of pool keys; currency0 of path[i] == currency1 of path[i+1].
+    /// @param recipient          Address that receives the output token (currency0 of last pool).
+    /// @param amountIn           Exact amount of currency1 of path[0] to spend.
+    /// @param amountOutMinimum   Minimum amount of currency0 of path[last] to receive.
+    /// @param deadline           Block timestamp after which the call reverts.
+    ///
+    /// @return amountOut  Actual output token delivered to recipient.
+    function takeOrderInput(
+        UnibuyPoolKey[] calldata path,
+        address recipient,
+        uint256 amountIn,
+        uint256 amountOutMinimum,
+        uint256 deadline
+    ) external payable returns (uint256 amountOut);
+
+    /// @notice Execute a single-pool exact-output taker order.
+    ///
+    /// @param key                Resolved pool key to trade against.
+    /// @param recipient          Address that receives the output token (currency0).
+    /// @param amountOut          Exact amount of currency0 to receive.
+    /// @param amountInMaximum    Maximum amount of currency1 to spend (slippage guard).
+    /// @param sqrtPriceLimitX96  Price ceiling in sqrt Q64.96 terms; must be >= current price.
+    /// @param deadline           Block timestamp after which the call reverts.
+    ///
+    /// @return amountIn  Actual currency1 spent by msg.sender.
+    function takeOrderOutputSingle(
+        UnibuyPoolKey calldata key,
+        address recipient,
+        uint256 amountOut,
+        uint256 amountInMaximum,
+        uint160 sqrtPriceLimitX96,
+        uint256 deadline
+    ) external payable returns (uint256 amountIn);
+
+    /// @notice Execute a multi-hop exact-output taker order (path traversed in reverse).
+    ///
+    /// @param path               Ordered array of pool keys; currency0 of path[i] == currency1 of path[i+1].
+    /// @param recipient          Address that receives the output token (currency0 of last pool).
+    /// @param amountOut          Exact amount of currency0 of path[last] to receive.
+    /// @param amountInMaximum    Maximum amount of currency1 of path[0] to spend.
+    /// @param deadline           Block timestamp after which the call reverts.
+    ///
+    /// @return amountIn  Actual input token spent.
+    function takeOrderOutput(
+        UnibuyPoolKey[] calldata path,
+        address recipient,
+        uint256 amountOut,
+        uint256 amountInMaximum,
+        uint256 deadline
+    ) external payable returns (uint256 amountIn);
 
     // ─────────────────────────────────────────────────────────────────────────
     // Maker order

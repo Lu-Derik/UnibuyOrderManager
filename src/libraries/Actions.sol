@@ -8,30 +8,44 @@ pragma solidity ^0.8.26;
 ///   Build an `actions` bytes array (one byte per action) and a `params` bytes[]
 ///   array (one ABI-encoded element per action), then call `execute(actions, params, deadline)`.
 ///
-/// Example — two tandem taker orders then settle:
+/// Example — exact-input single-pool taker order then settle:
 ///   bytes memory actions = abi.encodePacked(
-///       Actions.TAKER_ORDER,
-///       Actions.TAKER_ORDER,
+///       Actions.TAKE_ORDER_INPUT_SINGLE,
 ///       Actions.SETTLE_ALL,
 ///       Actions.TAKE_ALL
 ///   );
 library Actions {
     // ── Order actions ─────────────────────────────────────────────────────────
 
-    /// @notice Execute a taker (market) swap.
-    /// @dev params: abi.encode(UnibuyPoolKey poolKey, bool exactInput, uint256 amount, uint160 poolPriceLimit)
-    ///   Returns: abi.encode(uint256 amountIn, uint256 amountOut, uint256 fee)
-    uint8 internal constant TAKER_ORDER = 0x01;
+    /// @notice Execute a single-pool exact-input taker swap.
+    /// @dev params: abi.encode(UnibuyPoolKey poolKey, uint256 amountIn, uint256 amountOutMinimum, uint160 sqrtPriceLimitX96)
+    ///   Returns: abi.encode(uint256 actualAmountIn, uint256 actualAmountOut, uint256 fee)
+    uint8 internal constant TAKE_ORDER_INPUT_SINGLE  = 0x01;
+
+    /// @notice Execute a multi-hop exact-input taker swap (path of pools).
+    /// @dev params: abi.encode(UnibuyPoolKey[] path, uint256 amountIn, uint256 amountOutMinimum)
+    ///   Returns: abi.encode(uint256 amountOut)
+    uint8 internal constant TAKE_ORDER_INPUT         = 0x02;
+
+    /// @notice Execute a single-pool exact-output taker swap.
+    /// @dev params: abi.encode(UnibuyPoolKey poolKey, uint256 amountOut, uint256 amountInMaximum, uint160 sqrtPriceLimitX96)
+    ///   Returns: abi.encode(uint256 amountIn)
+    uint8 internal constant TAKE_ORDER_OUTPUT_SINGLE = 0x03;
+
+    /// @notice Execute a multi-hop exact-output taker swap (path of pools, reversed traversal).
+    /// @dev params: abi.encode(UnibuyPoolKey[] path, uint256 amountOut, uint256 amountInMaximum)
+    ///   Returns: abi.encode(uint256 amountIn)
+    uint8 internal constant TAKE_ORDER_OUTPUT        = 0x04;
 
     /// @notice Place a maker (limit) order and mint an NFT.
-    /// @dev params: abi.encode(UnibuyPoolKey poolKey, int24 tl, int24 tu, uint128 liquidity, address recipient)
+    /// @dev params: abi.encode(UnibuyPoolKey poolKey, int24 tickLower, int24 tickUpper, uint128 liquidity, address recipient)
     ///   Returns: abi.encode(uint256 tokenId, uint96 compensation)
-    uint8 internal constant PLACE_MAKER = 0x02;
+    uint8 internal constant PLACE_MAKER = 0x05;
 
     /// @notice Cancel / close an existing maker order and receive proceeds.
     /// @dev params: abi.encode(UnibuyPoolKey key, uint256 tokenId)
     ///   Returns: abi.encode(uint256 token0Amount, uint256 token1Amount)
-    uint8 internal constant CLOSE_MAKER = 0x03;
+    uint8 internal constant CLOSE_MAKER = 0x06;
 
     // ── Settlement actions ────────────────────────────────────────────────────
 

@@ -56,9 +56,9 @@ abstract contract OrderManagerTestBase is Test {
     UnibuyPoolManager   internal poolManager;
     UnibuyOrderManager  internal orderManager;
 
-    /// @dev Forward pool: sell tokenA (currencyIn) for tokenB (currencyOut).
+    /// @dev Forward pool: sell tokenA (currency0) for tokenB (currency1).
     UnibuyPoolKey internal poolKey;
-    /// @dev Mirror pool: sell tokenB (currencyIn) for tokenA (currencyOut).
+    /// @dev Mirror pool: sell tokenB (currency0) for tokenA (currency1).
     UnibuyPoolKey internal mirrorKey;
 
     // ─────────────────────────────────────────────────────────────────────────
@@ -82,13 +82,13 @@ abstract contract OrderManagerTestBase is Test {
         );
 
         poolKey = UnibuyPoolKey({
-            currencyIn:  Currency.wrap(address(tokenA)),
-            currencyOut: Currency.wrap(address(tokenB)),
+            currency0:  Currency.wrap(address(tokenA)),
+            currency1: Currency.wrap(address(tokenB)),
             tickSpacing: TICK_SPACING
         });
         mirrorKey = UnibuyPoolKey({
-            currencyIn:  Currency.wrap(address(tokenB)),
-            currencyOut: Currency.wrap(address(tokenA)),
+            currency0:  Currency.wrap(address(tokenB)),
+            currency1: Currency.wrap(address(tokenA)),
             tickSpacing: TICK_SPACING
         });
 
@@ -172,17 +172,18 @@ abstract contract OrderManagerTestBase is Test {
         address taker,
         uint256 token1Amount,   // tokenB to spend
         uint160 sqrtPriceLimit
-    ) internal returns (uint256 token0Out, uint256 token1In, uint256 fee) {
+    ) internal returns (uint256 token0Out, uint256 token1In) {
         tokenB.mint(taker, token1Amount);
         vm.prank(taker);
-        (token1In, token0Out, fee) = orderManager.takeOrder(
+        token0Out = orderManager.takeOrderInputSingle(
             poolKey,
-            true,               // exactInput
-            token1Amount,
+            taker,              // recipient
+            token1Amount,       // amountIn
+            0,                  // amountOutMinimum — no slippage guard in helper
             sqrtPriceLimit,
-            taker,
             block.timestamp + 1 hours
         );
+        token1In = token1Amount; // exact-input: full amount is spent
     }
 
     /// @dev Execute a taker sell (pay tokenA, receive tokenB) via orderManager.
@@ -190,19 +191,20 @@ abstract contract OrderManagerTestBase is Test {
         address taker,
         uint256 token0Amount,   // tokenA to sell
         uint160 sqrtMinPriceFwd // min forward price (1 = no limit)
-    ) internal returns (uint256 token0In, uint256 token1Out, uint256 fee) {
+    ) internal returns (uint256 token0In, uint256 token1Out) {
         tokenA.mint(taker, token0Amount);
         // Convert the old forward-space sentinel to no limit in resolved mirror pool terms.
         uint160 mirrorLimit = sqrtMinPriceFwd <= 1 ? TickMath.MAX_SQRT_PRICE : sqrtMinPriceFwd;
         vm.prank(taker);
-        (token0In, token1Out, fee) = orderManager.takeOrder(
+        token1Out = orderManager.takeOrderInputSingle(
             mirrorKey,
-            true,               // exactInput
-            token0Amount,
+            taker,              // recipient
+            token0Amount,       // amountIn
+            0,                  // amountOutMinimum — no slippage guard in helper
             mirrorLimit,
-            taker,
             block.timestamp + 1 hours
         );
+        token0In = token0Amount; // exact-input: full amount is spent
     }
 
     /// @dev Close a maker order and return (token0Amount, token1Amount).

@@ -625,7 +625,7 @@ contract UnibuyOrderManager is
 
         address caller = _getLocker();
         address tokenOwner = ownerOf(tokenId);
-        if (!_isApprovedOrOwner(caller, tokenId)) revert NotTokenOwner(caller, tokenOwner);
+        if (!_isApprovedOrOwner(caller, tokenId)) revert NotOwnerNorApproved(caller, tokenOwner);
 
         PackedOrderInfo orderInfo = _orders[tokenId];
         if (!orderInfo.active()) revert OrderNotActive(tokenId);

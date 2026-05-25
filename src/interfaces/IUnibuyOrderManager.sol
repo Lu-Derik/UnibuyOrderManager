@@ -68,7 +68,7 @@ interface IUnibuyOrderManager {
     // ─────────────────────────────────────────────────────────────────────────
 
     error DeadlinePassed();
-    error NotTokenOwner(address caller, address owner);
+    error NotOwnerNorApproved(address caller, address owner);
     error OrderNotActive(uint256 tokenId);
     error BuyPriceBelowCurrent(uint160 limitSqrtPrice, uint160 currentSqrtPrice);
     error SellPriceAboveCurrent(uint160 limitSqrtPrice, uint160 currentSqrtPrice);

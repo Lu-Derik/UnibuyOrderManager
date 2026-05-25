@@ -220,7 +220,7 @@ contract MakerOrderTest is OrderManagerTestBase {
         vm.prank(bob);
         vm.expectRevert(
             abi.encodeWithSelector(
-                bytes4(keccak256("NotTokenOwner(address,address)")),
+                bytes4(keccak256("NotOwnerNorApproved(address,address)")),
                 bob,
                 alice
             )

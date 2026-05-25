@@ -317,14 +317,14 @@ contract SecurityTest is OrderManagerTestBase {
         assertGt(t0, 0, "permit-approved spender should receive token0");
     }
 
-    /// @dev A caller with no approval cannot close — must revert with NotTokenOwner.
+    /// @dev A caller with no approval cannot close — must revert with NotOwnerNorApproved.
     function test_fix3_notApproved_reverts() public {
         (uint256 tokenId,) = _placeSellOrder(alice, TL, TU, LIQ);
 
         vm.prank(dave);
         vm.expectRevert(
             abi.encodeWithSelector(
-                bytes4(keccak256("NotTokenOwner(address,address)")),
+                bytes4(keccak256("NotOwnerNorApproved(address,address)")),
                 dave,
                 alice
             )
@@ -346,7 +346,7 @@ contract SecurityTest is OrderManagerTestBase {
         vm.prank(carol);
         vm.expectRevert(
             abi.encodeWithSelector(
-                bytes4(keccak256("NotTokenOwner(address,address)")),
+                bytes4(keccak256("NotOwnerNorApproved(address,address)")),
                 carol,
                 alice
             )

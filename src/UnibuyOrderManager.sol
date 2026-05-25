@@ -263,8 +263,6 @@ contract UnibuyOrderManager is
         isNotLocked
         checkDeadline(deadline)
     {
-        if (amount0 == 0) revert ZeroAmount();
-
         bytes memory actions = abi.encodePacked(
             Actions.PLACE_ORDER_WITH_TAKE,
             Actions.SETTLE_ALL,
@@ -548,46 +546,48 @@ contract UnibuyOrderManager is
     ///              poolKey: already the resolved pool (wrapper handles forward/mirror selection)
     ///              ticks: already in resolved-pool terms (wrapper provides resolved values)
     function _handlePlaceOrder(bytes calldata params) internal {
-        (
-            UnibuyPoolKey calldata poolKey,
-            int24 tickLower,
-            int24 tickUpper,
-            uint128 liquidity,
-            address recipient
-        ) = params.decodePlaceMakerParams();
+        CalldataDecoder.PlaceOrderParams calldata placeParams = params.decodePlaceMakerParams();
 
-        _placeMakerInternal(poolKey, tickLower, tickUpper, liquidity, recipient);
+        _placeMakerInternal(
+            placeParams.poolKey,
+            placeParams.tickLower,
+            placeParams.tickUpper,
+            placeParams.liquidity,
+            placeParams.owner
+        );
     }
 
-    /// @dev Places a maker order with optional mirror pre-take using a token0 budget.
+    /// @dev Places a maker order with optional mirror pre-take using the token0 budget.
     function _handlePlaceOrderWithTake(bytes calldata params) internal {
         CalldataDecoder.PlaceOrderWithTakeParams calldata placeParams = params.decodePlaceOrderWithTakeParams();
 
-        if (placeParams.amount0 == 0) revert ZeroAmount();
-
         uint256 remainingAmount0 = placeParams.amount0;
+        int24 tickLowerForPlace = placeParams.tickLower;
 
         // If tickLower implies a better immediate execution region, consume token0 in mirror first.
         UnibuyPoolKey memory placeKey = placeParams.poolKey;
         UnibuyPoolKey memory mirrorKey = placeKey.mirrorKey();
         (uint160 mirrorCurrentPrice,,,,,, ) = poolManager.getSlot0(mirrorKey.toId());
-        uint160 mirrorTickLowerPrice = _toMirrorSqrt(TickMath.getSqrtPriceAtTick(placeParams.tickLower));
+        uint160 mirrorPriceLimit = TickMath.getSqrtPriceAtTick(-tickLowerForPlace);
 
-        if (mirrorTickLowerPrice > mirrorCurrentPrice) {
+        if (mirrorPriceLimit > mirrorCurrentPrice) {
             (, int128 delta1) =
                 // forge-lint: disable-next-line(unsafe-typecast)
-                poolManager.takeOrder(mirrorKey, -int256(placeParams.amount0), mirrorTickLowerPrice);
+                poolManager.takeOrder(mirrorKey, -int256(placeParams.amount0), mirrorPriceLimit);
 
-            // mirror currency1 is original token0, negative delta1 means token0 spent.
+            // mirror currency1 is original currency0, negative delta1 means currency0 spent.
             // forge-lint: disable-next-line(unsafe-typecast)
-            uint256 spentAmount0 = delta1 < 0 ? uint256(uint128(-delta1)) : 0;
+            uint256 spentAmount0 = uint256(uint128(-delta1));
             remainingAmount0 = placeParams.amount0 - spentAmount0;
+
+            // When pre-take is executed, normalize tickLower to the pool tick spacing.
+            tickLowerForPlace = _alignTickUpToSpacing(tickLowerForPlace, placeKey.tickSpacing);
         }
 
-        uint128 liquidity = _liquidityForAmount0(placeParams.tickLower, placeParams.tickUpper, remainingAmount0);
-        if (liquidity == 0) revert ZeroAmount();
+        if (remainingAmount0 == 0) return;
+        uint128 liquidity = _liquidityForAmount0(tickLowerForPlace, placeParams.tickUpper, remainingAmount0);
 
-        _placeMakerInternal(placeKey, placeParams.tickLower, placeParams.tickUpper, liquidity, placeParams.recipient);
+        _placeMakerInternal(placeKey, tickLowerForPlace, placeParams.tickUpper, liquidity, placeParams.owner);
     }
 
     /// @dev Shared maker placement implementation for action handlers.
@@ -598,7 +598,7 @@ contract UnibuyOrderManager is
         uint128 liquidity,
         address recipient
     ) internal {
-        if (liquidity == 0) revert ZeroAmount();
+        recipient = _mapRecipient(recipient);
 
         uint256 tokenId = nextTokenId++;
         poolManager.placeOrder(poolKey, tickLower, tickUpper, liquidity, bytes32(tokenId));
@@ -607,14 +607,12 @@ contract UnibuyOrderManager is
         _mint(recipient, tokenId);
 
         bytes25 poolId = bytes25(UnibuyPoolId.unwrap(poolKey.toId()));
-        // Store the full pool key on first sight (like PositionManager.poolKeys)
+        // Store the full pool key on first sight
         if (poolKeys[poolId].tickSpacing == 0) {
             poolKeys[poolId] = poolKey;
         }
 
         _orders[tokenId] = OrderInfoLibrary.initialize(poolId, tickLower, tickUpper);
-
-        // Deposit delta accumulates; SETTLE_ALL handles payment.
     }
 
     /// @dev Closes a maker order. Contains all business logic (auth check, storage lookup/update,
@@ -623,14 +621,14 @@ contract UnibuyOrderManager is
     /// @param params abi.encode(UnibuyPoolKey key, uint256 tokenId)
     ///              key is the FORWARD pool key; used to derive order direction.
     function _handleClose(bytes calldata params) internal {
-        (UnibuyPoolKey calldata key, uint256 tid) = params.decodeCloseMakerParams();
+        (UnibuyPoolKey calldata key, uint256 tokenId) = params.decodeCloseMakerParams();
 
         address caller = _getLocker();
-        address tokenOwner = ownerOf(tid);
-        if (!_isApprovedOrOwner(caller, tid)) revert NotTokenOwner(caller, tokenOwner);
+        address tokenOwner = ownerOf(tokenId);
+        if (!_isApprovedOrOwner(caller, tokenId)) revert NotTokenOwner(caller, tokenOwner);
 
-        PackedOrderInfo orderInfo = _orders[tid];
-        if (!orderInfo.active()) revert OrderNotActive(tid);
+        PackedOrderInfo orderInfo = _orders[tokenId];
+        if (!orderInfo.active()) revert OrderNotActive(tokenId);
 
         // Derive direction: stored poolId != forward pool Id → mirror-pool order.
         bool isMirrorOrder = (orderInfo.poolId() != bytes25(UnibuyPoolId.unwrap(key.toId())));
@@ -638,10 +636,10 @@ contract UnibuyOrderManager is
         int24 tickUpper = orderInfo.tickUpper();
 
         UnibuyPoolKey memory poolKey = isMirrorOrder ? key.mirrorKey() : key;
-        poolManager.closeOrder(poolKey, tickLower, tickUpper, bytes32(tid));
+        poolManager.closeOrder(poolKey, tickLower, tickUpper, bytes32(tokenId));
 
-        _orders[tid] = orderInfo.setInactive();
-        _burn(tid);
+        _orders[tokenId] = orderInfo.setInactive();
+        _burn(tokenId);
     }
 
     // ─────────────────────────────────────────────────────────────────────────
@@ -719,11 +717,6 @@ contract UnibuyOrderManager is
     // ─────────────────────────────────────────────────────────────────────────
     // Internal helpers
     // ─────────────────────────────────────────────────────────────────────────
-
-    function _toMirrorSqrt(uint160 sqrtFwdX96) internal pure returns (uint160) {
-        return uint160(FullMath.mulDiv(FixedPoint96.Q96, FixedPoint96.Q96, sqrtFwdX96));
-    }
-
     function _liquidityForAmount0(int24 tickLower, int24 tickUpper, uint256 amount0) internal pure returns (uint128) {
         if (amount0 == 0) return 0;
 
@@ -735,5 +728,13 @@ contract UnibuyOrderManager is
         uint256 sqrtProductDivQ96 = FullMath.mulDiv(uint256(sqrtLower), uint256(sqrtUpper), FixedPoint96.Q96);
         uint256 liquidity = FullMath.mulDiv(amount0, sqrtProductDivQ96, uint256(sqrtUpper) - uint256(sqrtLower));
         return liquidity.toUint128();
+    }
+
+    function _alignTickUpToSpacing(int24 tick, int24 tickSpacing) internal pure returns (int24) {
+        int24 compressed = tick / tickSpacing;
+        if (tick > 0 && tick % tickSpacing != 0) {
+            compressed++;
+        }
+        return compressed * tickSpacing;
     }
 }

@@ -106,7 +106,7 @@ contract TakerOrderTest is OrderManagerTestBase {
 
     function test_takerBuy_revert_zeroAmount() public {
         vm.prank(dave);
-        vm.expectRevert(abi.encodeWithSelector(bytes4(keccak256("ZeroAmount()"))));
+        vm.expectRevert(abi.encodeWithSelector(bytes4(keccak256("ZeroTakeOrderAmount()"))));
         orderManager.takeOrderInputSingle(
             poolKey, dave, 0, 0, TickMath.getSqrtPriceAtTick(TU), block.timestamp + 1 hours
         );
@@ -202,7 +202,7 @@ contract TakerOrderTest is OrderManagerTestBase {
 
     function test_takerSell_revert_zeroAmount() public {
         vm.prank(dave);
-        vm.expectRevert(abi.encodeWithSelector(bytes4(keccak256("ZeroAmount()"))));
+        vm.expectRevert(abi.encodeWithSelector(bytes4(keccak256("ZeroTakeOrderAmount()"))));
         orderManager.takeOrderInputSingle(mirrorKey, dave, 0, 0, TickMath.MAX_SQRT_PRICE, block.timestamp + 1 hours);
     }
 

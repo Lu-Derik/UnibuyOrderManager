@@ -73,6 +73,7 @@ interface IUnibuyOrderManager {
     error BuyPriceBelowCurrent(uint160 limitSqrtPrice, uint160 currentSqrtPrice);
     error SellPriceAboveCurrent(uint160 limitSqrtPrice, uint160 currentSqrtPrice);
     error ZeroAmount();
+    error InvalidPath();
     error InvalidActionType(uint8 action);
     error TooLittleReceived(uint256 minAmountOut, uint256 actualAmountOut);
     error TooMuchRequested(uint256 maxAmountIn, uint256 actualAmountIn);

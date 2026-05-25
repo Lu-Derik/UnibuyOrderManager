@@ -3,11 +3,40 @@ pragma solidity ^0.8.26;
 
 import {UnibuyPoolKey} from "@unibuy/types/UnibuyPoolKey.sol";
 import {Currency} from "@unibuy/types/Currency.sol";
+import {PathKey} from "./PathKey.sol";
 
 /// @title CalldataDecoder
 /// @notice Efficient calldata decoders used by UnibuyOrderManager action routing.
 library CalldataDecoder {
     error SliceOutOfBounds();
+
+    struct TakeOrderInputSingleParams {
+        UnibuyPoolKey poolKey;
+        uint256 amountIn;
+        uint256 amountOutMinimum;
+        uint160 sqrtPriceLimitX96;
+    }
+
+    struct TakeOrderOutputSingleParams {
+        UnibuyPoolKey poolKey;
+        uint256 amountOut;
+        uint256 amountInMaximum;
+        uint160 sqrtPriceLimitX96;
+    }
+
+    struct TakeOrderInputParams {
+        Currency currencyIn;
+        PathKey[] path;
+        uint256 amountIn;
+        uint256 amountOutMinimum;
+    }
+
+    struct TakeOrderOutputParams {
+        Currency currencyOut;
+        PathKey[] path;
+        uint256 amountOut;
+        uint256 amountInMaximum;
+    }
 
     /// @notice mask used for offsets and lengths to ensure no overflow
     uint256 internal constant OFFSET_OR_LENGTH_MASK = 0xffffffff;
@@ -60,22 +89,14 @@ library CalldataDecoder {
     function decodeTakeOrderInputSingleParams(bytes calldata params)
         internal
         pure
-        returns (
-            UnibuyPoolKey calldata poolKey,
-            uint256 amountIn,
-            uint256 amountOutMinimum,
-            uint160 sqrtPriceLimitX96
-        )
+        returns (TakeOrderInputSingleParams calldata takeParams)
     {
         assembly ("memory-safe") {
             if lt(params.length, 0xc0) {
                 mstore(0, SLICE_ERROR_SELECTOR)
                 revert(0x1c, 4)
             }
-            poolKey := params.offset
-            amountIn := calldataload(add(params.offset, 0x60))
-            amountOutMinimum := calldataload(add(params.offset, 0x80))
-            sqrtPriceLimitX96 := calldataload(add(params.offset, 0xa0))
+            takeParams := params.offset
         }
     }
 
@@ -84,22 +105,50 @@ library CalldataDecoder {
     function decodeTakeOrderOutputSingleParams(bytes calldata params)
         internal
         pure
-        returns (
-            UnibuyPoolKey calldata poolKey,
-            uint256 amountOut,
-            uint256 amountInMaximum,
-            uint160 sqrtPriceLimitX96
-        )
+        returns (TakeOrderOutputSingleParams calldata takeParams)
     {
         assembly ("memory-safe") {
             if lt(params.length, 0xc0) {
                 mstore(0, SLICE_ERROR_SELECTOR)
                 revert(0x1c, 4)
             }
-            poolKey := params.offset
-            amountOut := calldataload(add(params.offset, 0x60))
-            amountInMaximum := calldataload(add(params.offset, 0x80))
-            sqrtPriceLimitX96 := calldataload(add(params.offset, 0xa0))
+            takeParams := params.offset
+        }
+    }
+
+    /// @dev equivalent to abi.decode(params, (TakeOrderInputParams))
+    function decodeTakeOrderInputParams(bytes calldata params)
+        internal
+        pure
+        returns (TakeOrderInputParams calldata takeParams)
+    {
+        // TakeOrderInputParams is a variable length struct so we just have to look up its location.
+        assembly ("memory-safe") {
+            // minimum length when path is empty:
+            // 0xc0 = 6 * 0x20 -> struct offset, 4 struct head slots, and path length 0
+            if lt(params.length, 0xc0) {
+                mstore(0, SLICE_ERROR_SELECTOR)
+                revert(0x1c, 4)
+            }
+            takeParams := add(params.offset, calldataload(params.offset))
+        }
+    }
+
+    /// @dev equivalent to abi.decode(params, (TakeOrderOutputParams))
+    function decodeTakeOrderOutputParams(bytes calldata params)
+        internal
+        pure
+        returns (TakeOrderOutputParams calldata takeParams)
+    {
+        // TakeOrderOutputParams is a variable length struct so we just have to look up its location.
+        assembly ("memory-safe") {
+            // minimum length when path is empty:
+            // 0xc0 = 6 * 0x20 -> struct offset, 4 struct head slots, and path length 0
+            if lt(params.length, 0xc0) {
+                mstore(0, SLICE_ERROR_SELECTOR)
+                revert(0x1c, 4)
+            }
+            takeParams := add(params.offset, calldataload(params.offset))
         }
     }
 

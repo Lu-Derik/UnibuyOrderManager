@@ -352,21 +352,21 @@ contract TakerOrderTest is OrderManagerTestBase {
         currencyOut = Currency.wrap(address(tokenC));
         inputPath = new PathKey[](2);
         inputPath[0] = PathKey({
-            intermediateCurrency: Currency.wrap(address(tokenA)),
+            hopCurrency: Currency.wrap(address(tokenA)),
             tickSpacing: TICK_SPACING
         });
         inputPath[1] = PathKey({
-            intermediateCurrency: Currency.wrap(address(tokenC)),
+            hopCurrency: Currency.wrap(address(tokenC)),
             tickSpacing: TICK_SPACING
         });
 
         outputPath = new PathKey[](2);
         outputPath[0] = PathKey({
-            intermediateCurrency: Currency.wrap(address(tokenB)),
+            hopCurrency: Currency.wrap(address(tokenB)),
             tickSpacing: TICK_SPACING
         });
         outputPath[1] = PathKey({
-            intermediateCurrency: Currency.wrap(address(tokenA)),
+            hopCurrency: Currency.wrap(address(tokenA)),
             tickSpacing: TICK_SPACING
         });
     }

@@ -142,10 +142,17 @@ contract UnibuyOrderManager is
         );
 
         bytes[] memory params = new bytes[](3);
-        params[0] = abi.encode(currencyIn, path, amountIn, amountOutMinimum);
+        params[0] = abi.encode(
+            CalldataDecoder.TakeOrderInputParams({
+                currencyIn: currencyIn,
+                path: path,
+                amountIn: amountIn,
+                amountOutMinimum: amountOutMinimum
+            })
+        );
         params[1] = abi.encode(currencyIn); // user pays
         params[2] = abi.encode(
-            path[path.length - 1].intermediateCurrency,
+            path[path.length - 1].hopCurrency,
             recipient
         ); // user receives
 
@@ -203,8 +210,15 @@ contract UnibuyOrderManager is
         );
 
         bytes[] memory params = new bytes[](3);
-        params[0] = abi.encode(currencyOut, path, amountOut, amountInMaximum);
-        params[1] = abi.encode(path[0].intermediateCurrency); // user pays
+        params[0] = abi.encode(
+            CalldataDecoder.TakeOrderOutputParams({
+                currencyOut: currencyOut,
+                path: path,
+                amountOut: amountOut,
+                amountInMaximum: amountInMaximum
+            })
+        );
+        params[1] = abi.encode(path[0].hopCurrency); // user pays
         params[2] = abi.encode(currencyOut, recipient); // user receives
 
         _executeActions(abi.encode(actions, params));
@@ -390,36 +404,34 @@ contract UnibuyOrderManager is
     // Order action handlers
     // ─────────────────────────────────────────────────────────────────────────
 
-    /// @dev Executes a single-pool exact-input taker swap.
+    /// @dev Executes a single-pool exact-input taker order.
     /// @param params abi.encode(UnibuyPoolKey poolKey, uint256 amountIn, uint256 amountOutMinimum, uint160 sqrtPriceLimitX96)
     function _handleTakeOrderInputSingle(bytes calldata params) internal {
-        (UnibuyPoolKey calldata poolKey, uint256 amountIn, uint256 amountOutMinimum, uint160 sqrtPriceLimitX96) =
-            params.decodeTakeOrderInputSingleParams();
+        CalldataDecoder.TakeOrderInputSingleParams calldata takeParams = params.decodeTakeOrderInputSingleParams();
 
         (int128 delta0,) =
             // forge-lint: disable-next-line(unsafe-typecast)
-            poolManager.takeOrder(poolKey, -int256(amountIn), sqrtPriceLimitX96);
+            poolManager.takeOrder(takeParams.poolKey, -int256(takeParams.amountIn), takeParams.sqrtPriceLimitX96);
 
-        // delta0 > 0  -> pool owes currency0 to this contract (user output)
         // forge-lint: disable-next-line(unsafe-typecast)
-        uint256 outAmount = delta0 > 0 ? uint256(uint128(delta0)) : 0;
+        uint256 outAmount = uint256(uint128(delta0));
 
-        if (outAmount < amountOutMinimum) revert TooLittleReceived(amountOutMinimum, outAmount);
+        if (outAmount < takeParams.amountOutMinimum) revert TooLittleReceived(takeParams.amountOutMinimum, outAmount);
     }
 
-    /// @dev Executes a multi-hop exact-input taker swap.
-    /// @param params abi.encode(Currency currencyIn, PathKey[] path, uint256 amountIn, uint256 amountOutMinimum)
+    /// @dev Executes a multi-hop exact-input taker order.
+    /// @param params abi.encode(CalldataDecoder.TakeOrderInputParams)
     function _handleTakeOrderInput(bytes calldata params) internal {
-        (Currency currencyIn, PathKey[] memory path, uint256 amountIn, uint256 amountOutMinimum) =
-            abi.decode(params, (Currency, PathKey[], uint256, uint256));
+        CalldataDecoder.TakeOrderInputParams calldata takeParams = params.decodeTakeOrderInputParams();
 
-        if (path.length == 0) revert InvalidPath();
+        if (takeParams.path.length == 0) revert InvalidPath();
 
-        uint256 currentAmount = amountIn;
-        for (uint256 i = 0; i < path.length; i++) {
-            PathKey memory hop = path[i];
+        uint256 currentAmount = takeParams.amountIn;
+        Currency currencyIn = takeParams.currencyIn;
+        for (uint256 i = 0; i < takeParams.path.length; i++) {
+            PathKey calldata hop = takeParams.path[i];
             UnibuyPoolKey memory hopKey = UnibuyPoolKey({
-                currency0: hop.intermediateCurrency,
+                currency0: hop.hopCurrency,
                 currency1: currencyIn,
                 tickSpacing: hop.tickSpacing
             });
@@ -430,44 +442,43 @@ contract UnibuyOrderManager is
 
             // forge-lint: disable-next-line(unsafe-typecast)
             currentAmount = uint256(uint128(delta0));
-            currencyIn = hop.intermediateCurrency;
+            currencyIn = hop.hopCurrency;
         }
 
-        if (currentAmount < amountOutMinimum) revert TooLittleReceived(amountOutMinimum, currentAmount);
+        if (currentAmount < takeParams.amountOutMinimum) revert TooLittleReceived(takeParams.amountOutMinimum, currentAmount);
     }
 
-    /// @dev Executes a single-pool exact-output taker swap.
+    /// @dev Executes a single-pool exact-output taker order.
     /// @param params abi.encode(UnibuyPoolKey poolKey, uint256 amountOut, uint256 amountInMaximum, uint160 sqrtPriceLimitX96)
     function _handleTakeOrderOutputSingle(bytes calldata params) internal {
-        (UnibuyPoolKey calldata poolKey, uint256 amountOut, uint256 amountInMaximum, uint160 sqrtPriceLimitX96) =
-            params.decodeTakeOrderOutputSingleParams();
+        CalldataDecoder.TakeOrderOutputSingleParams calldata takeParams = params.decodeTakeOrderOutputSingleParams();
 
         (, int128 delta1) =
             // forge-lint: disable-next-line(unsafe-typecast)
-            poolManager.takeOrder(poolKey, int256(amountOut), sqrtPriceLimitX96);
+            poolManager.takeOrder(takeParams.poolKey, int256(takeParams.amountOut), takeParams.sqrtPriceLimitX96);
 
         // forge-lint: disable-next-line(unsafe-typecast)
-        uint256 inAmount  = delta1 < 0 ? uint256(uint128(-delta1)) : 0;
+        uint256 inAmount = uint256(uint128(-delta1));
 
-        if (inAmount > amountInMaximum) revert TooMuchRequested(amountInMaximum, inAmount);
+        if (inAmount > takeParams.amountInMaximum) revert TooMuchRequested(takeParams.amountInMaximum, inAmount);
     }
 
-    /// @dev Executes a multi-hop exact-output taker swap (reversed path traversal).
-    /// @param params abi.encode(Currency currencyOut, PathKey[] path, uint256 amountOut, uint256 amountInMaximum)
+    /// @dev Executes a multi-hop exact-output taker order (reversed path traversal).
+    /// @param params abi.encode(CalldataDecoder.TakeOrderOutputParams)
     function _handleTakeOrderOutput(bytes calldata params) internal {
-        (Currency currencyOut, PathKey[] memory path, uint256 amountOut, uint256 amountInMaximum) =
-            abi.decode(params, (Currency, PathKey[], uint256, uint256));
+        CalldataDecoder.TakeOrderOutputParams calldata takeParams = params.decodeTakeOrderOutputParams();
 
-        if (path.length == 0) revert InvalidPath();
+        if (takeParams.path.length == 0) revert InvalidPath();
 
         // Traverse in reverse to compute required input for exact output
-        uint256 currentAmount = amountOut;
-        for (uint256 i = path.length; i > 0; ) {
+        uint256 currentAmount = takeParams.amountOut;
+        Currency currencyOut = takeParams.currencyOut;
+        for (uint256 i = takeParams.path.length; i > 0; ) {
             unchecked { --i; }
-            PathKey memory pathKey = path[i];
+            PathKey calldata pathKey = takeParams.path[i];
             UnibuyPoolKey memory hopKey = UnibuyPoolKey({
                 currency0: currencyOut,
-                currency1: pathKey.intermediateCurrency,
+                currency1: pathKey.hopCurrency,
                 tickSpacing: pathKey.tickSpacing
             });
             (, int128 delta1) =
@@ -476,10 +487,10 @@ contract UnibuyOrderManager is
 
             // forge-lint: disable-next-line(unsafe-typecast)    
             currentAmount = uint256(uint128(-delta1));
-            currencyOut = pathKey.intermediateCurrency;
+            currencyOut = pathKey.hopCurrency;
         }
 
-        if (currentAmount > amountInMaximum) revert TooMuchRequested(amountInMaximum, currentAmount);
+        if (currentAmount > takeParams.amountInMaximum) revert TooMuchRequested(takeParams.amountInMaximum, currentAmount);
     }
 
     /// @dev Places a maker limit order. The resolved pool key and pool-term ticks are

@@ -4,6 +4,6 @@ pragma solidity ^0.8.26;
 import {Currency} from "@unibuy/types/Currency.sol";
 
 struct PathKey {
-    Currency intermediateCurrency;
+    Currency hopCurrency;
     int24 tickSpacing;
 }

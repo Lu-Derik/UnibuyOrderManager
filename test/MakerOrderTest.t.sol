@@ -54,7 +54,7 @@ contract MakerOrderTest is OrderManagerTestBase {
     function test_placeSellOrder_revert_deadline() public {
         vm.prank(alice);
         vm.expectRevert(abi.encodeWithSelector(bytes4(keccak256("DeadlinePassed()"))));
-        orderManager.placeOrder(poolKey, TL, TU, LIQ, block.timestamp - 1);
+        orderManager.placeOrderNoTake(poolKey, TL, TU, LIQ, block.timestamp - 1);
     }
 
     // Multiple sell orders from different makers
@@ -102,7 +102,34 @@ contract MakerOrderTest is OrderManagerTestBase {
     function test_placeBuyOrder_revert_deadline() public {
         vm.prank(alice);
         vm.expectRevert(abi.encodeWithSelector(bytes4(keccak256("DeadlinePassed()"))));
-        orderManager.placeOrder(mirrorKey, TL, TU, LIQ, block.timestamp - 1);
+        orderManager.placeOrderNoTake(mirrorKey, TL, TU, LIQ, block.timestamp - 1);
+    }
+
+    function test_placeOrderWithTake_mintsNftAndDepositsToken0() public {
+        uint256 beforeA = tokenA.balanceOf(alice);
+        uint256 beforeId = orderManager.nextTokenId();
+
+        vm.prank(alice);
+        orderManager.placeOrderWithTake(poolKey, TL, TU, 1e18, block.timestamp + 1 hours);
+
+        assertEq(orderManager.ownerOf(beforeId), alice, "alice should own nft");
+        assertLt(tokenA.balanceOf(alice), beforeA, "token0 should be spent");
+    }
+
+    function test_placeOrderWithTake_executesMirrorTakeWhenNeeded() public {
+        // Seed mirror-side liquidity in [60, 120] so mirror take from 0 -> 120 has active segment.
+        _placeBuyOrder(bob, -120, -60, LIQ);
+
+        // tickLower below current forward price => mirror threshold above current mirror price.
+        int24 lower = -120;
+        int24 upper = 120;
+
+        uint256 beforeB = tokenB.balanceOf(alice);
+
+        vm.prank(alice);
+        orderManager.placeOrderWithTake(poolKey, lower, upper, 2e18, block.timestamp + 1 hours);
+
+        assertGt(tokenB.balanceOf(alice), beforeB, "mirror pre-take should credit token1");
     }
 
     // ─────────────────────────────────────────────────────────────────────────

@@ -162,11 +162,26 @@ interface IUnibuyOrderManager {
     /// @param liquidity  Virtual liquidity to provide.
     /// @param deadline   Expiry timestamp.
     ///
-    function placeOrder(
+    function placeOrderNoTake(
         UnibuyPoolKey calldata key,
         int24   tickLower,
         int24   tickUpper,
         uint128 liquidity,
+        uint256 deadline
+    ) external payable;
+
+    /// @notice Place maker order using a token0 budget; optionally consumes part of it via mirror take first.
+    ///
+    /// @param key        Resolved pool key to place into.
+    /// @param tickLower  Lower tick in key terms.
+    /// @param tickUpper  Upper tick in key terms.
+    /// @param amount0    Total token0 budget provided by user.
+    /// @param deadline   Expiry timestamp.
+    function placeOrderWithTake(
+        UnibuyPoolKey calldata key,
+        int24 tickLower,
+        int24 tickUpper,
+        uint256 amount0,
         uint256 deadline
     ) external payable;
 

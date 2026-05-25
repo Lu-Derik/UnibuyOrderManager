@@ -98,7 +98,7 @@ contract ReentrantERC20 {
         } else if (attackType == AttackType.PLACE_MAKER_ORDER) {
             (success, revertData) = address(target).call(
                 abi.encodeCall(
-                    target.placeOrder,
+                    target.placeOrderNoTake,
                     (attackKey, int24(60), int24(120), uint128(1), block.timestamp + 1 hours)
                 )
             );
@@ -177,7 +177,7 @@ contract SecurityTest is OrderManagerTestBase {
         vm.prank(alice);
         tokenA.approve(address(orderManager), type(uint256).max);
         vm.prank(alice);
-        orderManager.placeOrder(
+        orderManager.placeOrderNoTake(
             malPool, TL, TU, uint128(LIQ), block.timestamp + 1 hours
         );
 
@@ -290,7 +290,7 @@ contract SecurityTest is OrderManagerTestBase {
         // Place order as aliceSigner
         uint256 tokenId = orderManager.nextTokenId();
         vm.prank(aliceSigner);
-        orderManager.placeOrder(poolKey, TL, TU, uint128(LIQ), block.timestamp + 1 hours);
+        orderManager.placeOrderNoTake(poolKey, TL, TU, uint128(LIQ), block.timestamp + 1 hours);
         assertEq(orderManager.ownerOf(tokenId), aliceSigner);
 
         // aliceSigner signs a permit allowing bob to manage tokenId
@@ -374,7 +374,7 @@ contract SecurityTest is OrderManagerTestBase {
         vm.prank(alice);
         tokenA.approve(address(orderManager), type(uint256).max);
         vm.prank(alice);
-        orderManager.placeOrder(
+        orderManager.placeOrderNoTake(
             nativePool, TL, TU, uint128(LIQ), block.timestamp + 1 hours
         );
 

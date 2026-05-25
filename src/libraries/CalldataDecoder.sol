@@ -38,6 +38,14 @@ library CalldataDecoder {
         uint256 amountInMaximum;
     }
 
+    struct PlaceOrderWithTakeParams {
+        UnibuyPoolKey poolKey;
+        int24 tickLower;
+        int24 tickUpper;
+        uint256 amount0;
+        address recipient;
+    }
+
     /// @notice mask used for offsets and lengths to ensure no overflow
     uint256 internal constant OFFSET_OR_LENGTH_MASK = 0xffffffff;
     uint256 internal constant OFFSET_OR_LENGTH_MASK_AND_WORD_ALIGN = 0xffffffe0;
@@ -174,6 +182,21 @@ library CalldataDecoder {
             tickUpper := calldataload(add(params.offset, 0x80))
             liquidity := calldataload(add(params.offset, 0xa0))
             recipient := calldataload(add(params.offset, 0xc0))
+        }
+    }
+
+    /// @dev equivalent to abi.decode(params, (UnibuyPoolKey, int24, int24, uint256, address))
+    function decodePlaceOrderWithTakeParams(bytes calldata params)
+        internal
+        pure
+        returns (PlaceOrderWithTakeParams calldata placeParams)
+    {
+        assembly ("memory-safe") {
+            if lt(params.length, 0xe0) {
+                mstore(0, SLICE_ERROR_SELECTOR)
+                revert(0x1c, 4)
+            }
+            placeParams := params.offset
         }
     }
 

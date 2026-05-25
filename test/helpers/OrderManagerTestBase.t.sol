@@ -148,7 +148,7 @@ abstract contract OrderManagerTestBase is Test {
 
         tokenId = orderManager.nextTokenId();
         vm.prank(maker);
-        orderManager.placeOrder(poolKey, tickLower, tickUpper, liquidity, block.timestamp + 1 hours);
+        orderManager.placeOrderNoTake(poolKey, tickLower, tickUpper, liquidity, block.timestamp + 1 hours);
         compensation = 0;
     }
 
@@ -163,7 +163,7 @@ abstract contract OrderManagerTestBase is Test {
         int24 mirrorTu = -tickLower;
         tokenId = orderManager.nextTokenId();
         vm.prank(maker);
-        orderManager.placeOrder(mirrorKey, mirrorTl, mirrorTu, liquidity, block.timestamp + 1 hours);
+        orderManager.placeOrderNoTake(mirrorKey, mirrorTl, mirrorTu, liquidity, block.timestamp + 1 hours);
         compensation = 0;
     }
 

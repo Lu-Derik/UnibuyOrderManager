@@ -230,7 +230,7 @@ contract UnibuyOrderManager is
     // ─────────────────────────────────────────────────────────────────────────
 
     /// @inheritdoc IUnibuyOrderManager
-    function placeOrder(
+    function placeOrderNoTake(
         UnibuyPoolKey calldata key,
         int24   tickLower,
         int24   tickUpper,
@@ -242,10 +242,38 @@ contract UnibuyOrderManager is
         isNotLocked
         checkDeadline(deadline)
     {
-        bytes memory actions = abi.encodePacked(Actions.PLACE_MAKER, Actions.SETTLE_ALL);
+        bytes memory actions = abi.encodePacked(Actions.PLACE_ORDER, Actions.SETTLE_ALL);
         bytes[] memory params = new bytes[](2);
         params[0] = abi.encode(key, tickLower, tickUpper, liquidity, msg.sender);
         params[1] = abi.encode(key.currency0);
+
+        _executeActions(abi.encode(actions, params));
+    }
+
+    /// @inheritdoc IUnibuyOrderManager
+    function placeOrderWithTake(
+        UnibuyPoolKey calldata key,
+        int24 tickLower,
+        int24 tickUpper,
+        uint256 amount0,
+        uint256 deadline
+    )
+        external
+        payable
+        isNotLocked
+        checkDeadline(deadline)
+    {
+        if (amount0 == 0) revert ZeroAmount();
+
+        bytes memory actions = abi.encodePacked(
+            Actions.PLACE_ORDER_WITH_TAKE,
+            Actions.SETTLE_ALL,
+            Actions.TAKE_ALL
+        );
+        bytes[] memory params = new bytes[](3);
+        params[0] = abi.encode(key, tickLower, tickUpper, amount0, msg.sender);
+        params[1] = abi.encode(key.currency0);            // user pays token0 debt
+        params[2] = abi.encode(key.currency1, msg.sender); // user receives token1 from mirror take
 
         _executeActions(abi.encode(actions, params));
     }
@@ -268,7 +296,7 @@ contract UnibuyOrderManager is
         bytes25 poolId = _orders[tokenId].poolId();
         UnibuyPoolKey memory resolvedPool = poolKeys[poolId];
 
-        bytes memory actions = abi.encodePacked(Actions.CLOSE_MAKER, Actions.TAKE_PAIR);
+        bytes memory actions = abi.encodePacked(Actions.CLOSE_ORDER, Actions.TAKE_PAIR);
         bytes[] memory params = new bytes[](2);
         params[0] = abi.encode(key, tokenId);
         params[1] = abi.encode(resolvedPool.currency0, resolvedPool.currency1, msg.sender);
@@ -314,7 +342,7 @@ contract UnibuyOrderManager is
         if (takerAmountIn > 0 && makerLiquidity > 0) {
             actions = abi.encodePacked(
                 Actions.TAKE_ORDER_INPUT_SINGLE,
-                Actions.PLACE_MAKER,
+                Actions.PLACE_ORDER,
                 Actions.SETTLE_ALL,
                 Actions.TAKE_ALL
             );
@@ -335,7 +363,7 @@ contract UnibuyOrderManager is
             params[2] = abi.encode(takerKey.currency0, recipient); // user receives
         } else {
             // makerLiquidity > 0 only
-            actions = abi.encodePacked(Actions.PLACE_MAKER, Actions.SETTLE_ALL);
+            actions = abi.encodePacked(Actions.PLACE_ORDER, Actions.SETTLE_ALL);
             params = new bytes[](2);
             params[0] = abi.encode(makerKey, makerTickLower, makerTickUpper, makerLiquidity, msg.sender);
             params[1] = abi.encode(takerKey.currency1);
@@ -375,9 +403,11 @@ contract UnibuyOrderManager is
             _handleTakeOrderOutputSingle(params);
         } else if (action == Actions.TAKE_ORDER_OUTPUT) {
             _handleTakeOrderOutput(params);
-        } else if (action == Actions.PLACE_MAKER) {
-            _handleMaker(params);
-        } else if (action == Actions.CLOSE_MAKER) {
+        } else if (action == Actions.PLACE_ORDER) {
+            _handlePlaceOrder(params);
+        } else if (action == Actions.PLACE_ORDER_WITH_TAKE) {
+            _handlePlaceOrderWithTake(params);
+        } else if (action == Actions.CLOSE_ORDER) {
             _handleClose(params);
         } else if (action == Actions.SETTLE) {
             _handleSettle(params);
@@ -517,7 +547,7 @@ contract UnibuyOrderManager is
     ///                          uint128 liquidity, address recipient)
     ///              poolKey: already the resolved pool (wrapper handles forward/mirror selection)
     ///              ticks: already in resolved-pool terms (wrapper provides resolved values)
-    function _handleMaker(bytes calldata params) internal {
+    function _handlePlaceOrder(bytes calldata params) internal {
         (
             UnibuyPoolKey calldata poolKey,
             int24 tickLower,
@@ -525,6 +555,50 @@ contract UnibuyOrderManager is
             uint128 liquidity,
             address recipient
         ) = params.decodePlaceMakerParams();
+
+        _placeMakerInternal(poolKey, tickLower, tickUpper, liquidity, recipient);
+    }
+
+    /// @dev Places a maker order with optional mirror pre-take using a token0 budget.
+    function _handlePlaceOrderWithTake(bytes calldata params) internal {
+        CalldataDecoder.PlaceOrderWithTakeParams calldata placeParams = params.decodePlaceOrderWithTakeParams();
+
+        if (placeParams.amount0 == 0) revert ZeroAmount();
+
+        uint256 remainingAmount0 = placeParams.amount0;
+
+        // If tickLower implies a better immediate execution region, consume token0 in mirror first.
+        UnibuyPoolKey memory placeKey = placeParams.poolKey;
+        UnibuyPoolKey memory mirrorKey = placeKey.mirrorKey();
+        (uint160 mirrorCurrentPrice,,,,,, ) = poolManager.getSlot0(mirrorKey.toId());
+        uint160 mirrorTickLowerPrice = _toMirrorSqrt(TickMath.getSqrtPriceAtTick(placeParams.tickLower));
+
+        if (mirrorTickLowerPrice > mirrorCurrentPrice) {
+            (, int128 delta1) =
+                // forge-lint: disable-next-line(unsafe-typecast)
+                poolManager.takeOrder(mirrorKey, -int256(placeParams.amount0), mirrorTickLowerPrice);
+
+            // mirror currency1 is original token0, negative delta1 means token0 spent.
+            // forge-lint: disable-next-line(unsafe-typecast)
+            uint256 spentAmount0 = delta1 < 0 ? uint256(uint128(-delta1)) : 0;
+            remainingAmount0 = placeParams.amount0 - spentAmount0;
+        }
+
+        uint128 liquidity = _liquidityForAmount0(placeParams.tickLower, placeParams.tickUpper, remainingAmount0);
+        if (liquidity == 0) revert ZeroAmount();
+
+        _placeMakerInternal(placeKey, placeParams.tickLower, placeParams.tickUpper, liquidity, placeParams.recipient);
+    }
+
+    /// @dev Shared maker placement implementation for action handlers.
+    function _placeMakerInternal(
+        UnibuyPoolKey memory poolKey,
+        int24 tickLower,
+        int24 tickUpper,
+        uint128 liquidity,
+        address recipient
+    ) internal {
+        if (liquidity == 0) revert ZeroAmount();
 
         uint256 tokenId = nextTokenId++;
         poolManager.placeOrder(poolKey, tickLower, tickUpper, liquidity, bytes32(tokenId));
@@ -648,5 +722,18 @@ contract UnibuyOrderManager is
 
     function _toMirrorSqrt(uint160 sqrtFwdX96) internal pure returns (uint160) {
         return uint160(FullMath.mulDiv(FixedPoint96.Q96, FixedPoint96.Q96, sqrtFwdX96));
+    }
+
+    function _liquidityForAmount0(int24 tickLower, int24 tickUpper, uint256 amount0) internal pure returns (uint128) {
+        if (amount0 == 0) return 0;
+
+        uint160 sqrtLower = TickMath.getSqrtPriceAtTick(tickLower);
+        uint160 sqrtUpper = TickMath.getSqrtPriceAtTick(tickUpper);
+        if (sqrtLower > sqrtUpper) (sqrtLower, sqrtUpper) = (sqrtUpper, sqrtLower);
+        if (sqrtLower == sqrtUpper) return 0;
+
+        uint256 sqrtProductDivQ96 = FullMath.mulDiv(uint256(sqrtLower), uint256(sqrtUpper), FixedPoint96.Q96);
+        uint256 liquidity = FullMath.mulDiv(amount0, sqrtProductDivQ96, uint256(sqrtUpper) - uint256(sqrtLower));
+        return liquidity.toUint128();
     }
 }

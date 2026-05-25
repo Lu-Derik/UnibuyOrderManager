@@ -40,12 +40,17 @@ library Actions {
     /// @notice Place a maker (limit) order and mint an NFT.
     /// @dev params: abi.encode(UnibuyPoolKey poolKey, int24 tickLower, int24 tickUpper, uint128 liquidity, address recipient)
     ///   Returns: abi.encode(uint256 tokenId, uint96 compensation)
-    uint8 internal constant PLACE_MAKER = 0x05;
+    uint8 internal constant PLACE_ORDER = 0x05;
 
     /// @notice Cancel / close an existing maker order and receive proceeds.
     /// @dev params: abi.encode(UnibuyPoolKey key, uint256 tokenId)
     ///   Returns: abi.encode(uint256 token0Amount, uint256 token1Amount)
-    uint8 internal constant CLOSE_MAKER = 0x06;
+    uint8 internal constant CLOSE_ORDER = 0x06;
+
+    /// @notice Place a maker order with token0 budget and optional pre-take on mirror pool.
+    /// @dev params: abi.encode(UnibuyPoolKey poolKey, int24 tickLower, int24 tickUpper, uint256 amount0, address recipient)
+    ///   Returns: abi.encode(uint256 tokenId)
+    uint8 internal constant PLACE_ORDER_WITH_TAKE = 0x07;
 
     // ── Settlement actions ────────────────────────────────────────────────────
 

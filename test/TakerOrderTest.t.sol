@@ -6,6 +6,8 @@ import {TickMath}             from "@unibuy/libraries/TickMath.sol";
 import {UnibuyPoolKey}        from "@unibuy/types/UnibuyPoolKey.sol";
 import {Currency}             from "@unibuy/types/Currency.sol";
 import {PathKey} from "../src/libraries/PathKey.sol";
+import {Actions} from "../src/libraries/Actions.sol";
+import {CalldataDecoder} from "../src/libraries/CalldataDecoder.sol";
 import {TestERC20}            from "./helpers/TestERC20.sol";
 
 /// @title TakerOrderTest
@@ -472,5 +474,144 @@ contract TakerOrderTest is OrderManagerTestBase {
             )
         );
         orderManager.takeOrderOutput(currencyOut, path, dave, amountOut, actualIn - 1, block.timestamp + 1 hours);
+    }
+
+    function test_execute_openDelta_takeOrderInputSingle_consumesFullCredit() public {
+        _setupMirrorLiquidity();
+
+        uint256 seedAmountIn = 1e15;
+        tokenA.mint(dave, seedAmountIn);
+
+        bytes memory actions = abi.encodePacked(
+            Actions.TAKE_ORDER_INPUT_SINGLE,
+            Actions.TAKE_ORDER_INPUT_SINGLE,
+            Actions.SETTLE_ALL,
+            Actions.TAKE_ALL,
+            Actions.TAKE_ALL
+        );
+
+        bytes[] memory params = new bytes[](5);
+        params[0] = abi.encode(mirrorKey, seedAmountIn, uint256(0), TickMath.MAX_SQRT_PRICE);
+        params[1] = abi.encode(poolKey, uint256(0), uint256(0), TickMath.getSqrtPriceAtTick(TU));
+        params[2] = abi.encode(Currency.wrap(address(tokenA)));
+        params[3] = abi.encode(Currency.wrap(address(tokenA)), dave);
+        params[4] = abi.encode(Currency.wrap(address(tokenB)), dave);
+
+        uint256 aBefore = tokenA.balanceOf(dave);
+        uint256 bBefore = tokenB.balanceOf(dave);
+
+        vm.prank(dave);
+        orderManager.execute(actions, params, block.timestamp + 1 hours);
+
+        uint256 aAfter = tokenA.balanceOf(dave);
+        uint256 bAfter = tokenB.balanceOf(dave);
+
+        assertLt(aAfter, aBefore, "tokenA should be spent by first hop");
+        assertGe(bAfter, bBefore, "tokenB should not be over-spent when OPEN_DELTA is used");
+    }
+
+    function test_execute_openDelta_takeOrderOutputSingle_usesFullDebt() public {
+        _setupMirrorLiquidity();
+
+        uint256 seedAmountIn = 1e15;
+        tokenA.mint(dave, seedAmountIn);
+
+        bytes memory actions = abi.encodePacked(
+            Actions.TAKE_ORDER_INPUT_SINGLE,
+            Actions.TAKE_ORDER_OUTPUT_SINGLE,
+            Actions.SETTLE_ALL,
+            Actions.SETTLE_ALL,
+            Actions.TAKE_ALL,
+            Actions.TAKE_ALL
+        );
+
+        bytes[] memory params = new bytes[](6);
+        params[0] = abi.encode(mirrorKey, seedAmountIn, uint256(0), TickMath.MAX_SQRT_PRICE);
+        params[1] = abi.encode(poolKey, uint256(0), type(uint256).max, TickMath.getSqrtPriceAtTick(TU));
+        params[2] = abi.encode(Currency.wrap(address(tokenA)));
+        params[3] = abi.encode(Currency.wrap(address(tokenB)));
+        params[4] = abi.encode(Currency.wrap(address(tokenA)), dave);
+        params[5] = abi.encode(Currency.wrap(address(tokenB)), dave);
+
+        vm.prank(dave);
+        orderManager.execute(actions, params, block.timestamp + 1 hours);
+    }
+
+    function test_execute_openDelta_takeOrderInput_multiHop_consumesFullCredit() public {
+        _setupMirrorLiquidity();
+
+        uint256 seedAmountIn = 1e15;
+        tokenA.mint(dave, seedAmountIn);
+
+        PathKey[] memory path = new PathKey[](1);
+        path[0] = PathKey({
+            hopCurrency: Currency.wrap(address(tokenA)),
+            tickSpacing: TICK_SPACING
+        });
+
+        bytes memory actions = abi.encodePacked(
+            Actions.TAKE_ORDER_INPUT_SINGLE,
+            Actions.TAKE_ORDER_INPUT,
+            Actions.SETTLE_ALL,
+            Actions.TAKE_ALL,
+            Actions.TAKE_ALL
+        );
+
+        bytes[] memory params = new bytes[](5);
+        params[0] = abi.encode(mirrorKey, seedAmountIn, uint256(0), TickMath.MAX_SQRT_PRICE);
+        params[1] = abi.encode(
+            CalldataDecoder.TakeOrderInputParams({
+                currencyIn: Currency.wrap(address(tokenB)),
+                path: path,
+                amountIn: 0,
+                amountOutMinimum: 0
+            })
+        );
+        params[2] = abi.encode(Currency.wrap(address(tokenA)));
+        params[3] = abi.encode(Currency.wrap(address(tokenA)), dave);
+        params[4] = abi.encode(Currency.wrap(address(tokenB)), dave);
+
+        vm.prank(dave);
+        orderManager.execute(actions, params, block.timestamp + 1 hours);
+    }
+
+    function test_execute_openDelta_takeOrderOutput_multiHop_usesFullDebt() public {
+        _setupMirrorLiquidity();
+
+        uint256 seedAmountIn = 1e15;
+        tokenA.mint(dave, seedAmountIn);
+
+        PathKey[] memory path = new PathKey[](1);
+        path[0] = PathKey({
+            hopCurrency: Currency.wrap(address(tokenB)),
+            tickSpacing: TICK_SPACING
+        });
+
+        bytes memory actions = abi.encodePacked(
+            Actions.TAKE_ORDER_INPUT_SINGLE,
+            Actions.TAKE_ORDER_OUTPUT,
+            Actions.SETTLE_ALL,
+            Actions.SETTLE_ALL,
+            Actions.TAKE_ALL,
+            Actions.TAKE_ALL
+        );
+
+        bytes[] memory params = new bytes[](6);
+        params[0] = abi.encode(mirrorKey, seedAmountIn, uint256(0), TickMath.MAX_SQRT_PRICE);
+        params[1] = abi.encode(
+            CalldataDecoder.TakeOrderOutputParams({
+                currencyOut: Currency.wrap(address(tokenA)),
+                path: path,
+                amountOut: 0,
+                amountInMaximum: type(uint256).max
+            })
+        );
+        params[2] = abi.encode(Currency.wrap(address(tokenA)));
+        params[3] = abi.encode(Currency.wrap(address(tokenB)));
+        params[4] = abi.encode(Currency.wrap(address(tokenA)), dave);
+        params[5] = abi.encode(Currency.wrap(address(tokenB)), dave);
+
+        vm.prank(dave);
+        orderManager.execute(actions, params, block.timestamp + 1 hours);
     }
 }

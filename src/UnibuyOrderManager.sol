@@ -19,6 +19,7 @@ import {BaseActionsRouter}   from "./base/BaseActionsRouter.sol";
 import {DeltaResolver}       from "./base/DeltaResolver.sol";
 import {IUnibuyOrderManager} from "./interfaces/IUnibuyOrderManager.sol";
 import {Actions}             from "./libraries/Actions.sol";
+import {ActionConstants}     from "./libraries/ActionConstants.sol";
 import {PathKey} from "./libraries/PathKey.sol";
 import {PackedOrderInfo, OrderInfoLibrary} from "./libraries/OrderInfoLibrary.sol";
 import {CalldataDecoder} from "./libraries/CalldataDecoder.sol";
@@ -409,9 +410,14 @@ contract UnibuyOrderManager is
     function _handleTakeOrderInputSingle(bytes calldata params) internal {
         CalldataDecoder.TakeOrderInputSingleParams calldata takeParams = params.decodeTakeOrderInputSingleParams();
 
+        uint256 amountIn = takeParams.amountIn;
+        if (amountIn == ActionConstants.OPEN_DELTA) {
+            amountIn = _getFullCredit(takeParams.poolKey.currency1);
+        }
+
         (int128 delta0,) =
             // forge-lint: disable-next-line(unsafe-typecast)
-            poolManager.takeOrder(takeParams.poolKey, -int256(takeParams.amountIn), takeParams.sqrtPriceLimitX96);
+            poolManager.takeOrder(takeParams.poolKey, -int256(amountIn), takeParams.sqrtPriceLimitX96);
 
         // forge-lint: disable-next-line(unsafe-typecast)
         uint256 outAmount = uint256(uint128(delta0));
@@ -427,6 +433,9 @@ contract UnibuyOrderManager is
         if (takeParams.path.length == 0) revert InvalidPath();
 
         uint256 currentAmount = takeParams.amountIn;
+        if (currentAmount == ActionConstants.OPEN_DELTA) {
+            currentAmount = _getFullCredit(takeParams.currencyIn);
+        }
         Currency currencyIn = takeParams.currencyIn;
         for (uint256 i = 0; i < takeParams.path.length; i++) {
             PathKey calldata hop = takeParams.path[i];
@@ -453,9 +462,14 @@ contract UnibuyOrderManager is
     function _handleTakeOrderOutputSingle(bytes calldata params) internal {
         CalldataDecoder.TakeOrderOutputSingleParams calldata takeParams = params.decodeTakeOrderOutputSingleParams();
 
+        uint256 amountOut = takeParams.amountOut;
+        if (amountOut == ActionConstants.OPEN_DELTA) {
+            amountOut = _getFullDebt(takeParams.poolKey.currency0);
+        }
+
         (, int128 delta1) =
             // forge-lint: disable-next-line(unsafe-typecast)
-            poolManager.takeOrder(takeParams.poolKey, int256(takeParams.amountOut), takeParams.sqrtPriceLimitX96);
+            poolManager.takeOrder(takeParams.poolKey, int256(amountOut), takeParams.sqrtPriceLimitX96);
 
         // forge-lint: disable-next-line(unsafe-typecast)
         uint256 inAmount = uint256(uint128(-delta1));
@@ -472,6 +486,9 @@ contract UnibuyOrderManager is
 
         // Traverse in reverse to compute required input for exact output
         uint256 currentAmount = takeParams.amountOut;
+        if (currentAmount == ActionConstants.OPEN_DELTA) {
+            currentAmount = _getFullDebt(takeParams.currencyOut);
+        }
         Currency currencyOut = takeParams.currencyOut;
         for (uint256 i = takeParams.path.length; i > 0; ) {
             unchecked { --i; }

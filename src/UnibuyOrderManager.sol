@@ -7,6 +7,7 @@ import {Currency, CurrencyLibrary} from "@unibuy/types/Currency.sol";
 import {FullMath}           from "@unibuy/libraries/FullMath.sol";
 import {FixedPoint96}       from "@unibuy/libraries/FixedPoint96.sol";
 import {StateLibrary}       from "@unibuy/libraries/StateLibrary.sol";
+import {TransientStateLibrary} from "@unibuy/libraries/TransientStateLibrary.sol";
 import {SafeCast}           from "@unibuy/libraries/SafeCast.sol";
 import {TickMath}           from "@unibuy/libraries/TickMath.sol";
 
@@ -45,6 +46,7 @@ contract UnibuyOrderManager is
     using UnibuyPoolIdLibrary for UnibuyPoolKey;
     using CurrencyLibrary    for Currency;
     using StateLibrary       for IUnibuyPoolManager;
+    using TransientStateLibrary for IUnibuyPoolManager;
     using SafeCast           for uint256;
     using SafeCast           for int256;
     using OrderInfoLibrary   for PackedOrderInfo;
@@ -291,14 +293,23 @@ contract UnibuyOrderManager is
         isNotLocked
         checkDeadline(deadline)
     {
+        address tokenOwner = ownerOf(tokenId);
+
         // Look up the stored pool key to determine settlement currencies for TAKE_PAIR.
         bytes19 poolId = _orders[tokenId].poolId();
         UnibuyPoolKey memory resolvedPool = poolKeys[poolId];
 
-        bytes memory actions = abi.encodePacked(Actions.CLOSE_ORDER, Actions.TAKE_PAIR);
-        bytes[] memory params = new bytes[](2);
+        bytes memory actions = abi.encodePacked(
+            Actions.CLOSE_ORDER,
+            Actions.CLOSE_CURRENCY,
+            Actions.TAKE_ALL
+        );
+        bytes[] memory params = new bytes[](3);
         params[0] = abi.encode(resolvedPool, tokenId);
-        params[1] = abi.encode(resolvedPool.currency0, resolvedPool.currency1, msg.sender);
+        // Close token1 delta first: settle debt (if any) or take credit to tokenOwner.
+        params[1] = abi.encode(resolvedPool.currency1, tokenOwner);
+        // Then take any remaining token0 credit to tokenOwner.
+        params[2] = abi.encode(resolvedPool.currency0, tokenOwner);
 
         _executeActions(abi.encode(actions, params));
     }
@@ -352,6 +363,8 @@ contract UnibuyOrderManager is
             _handleSettlePair(params);
         } else if (action == Actions.TAKE_PAIR) {
             _handleTakePair(params);
+        } else if (action == Actions.CLOSE_CURRENCY) {
+            _handleCloseCurrency(params);
         } else {
             revert InvalidActionType(uint8(action));
         }
@@ -650,6 +663,25 @@ contract UnibuyOrderManager is
         _take(currency1, recipient, _getFullCredit(currency1));
     }
 
+    /// @dev Closes full delta for `currency` using `owner` as payer/recipient.
+    ///      If debt exists, settles from owner. If credit exists, transfers to owner.
+    /// @param params abi.encode(Currency currency, address owner)
+    function _handleCloseCurrency(bytes calldata params) internal {
+        (Currency currency, address owner) = params.decodeCurrencyAddress();
+        uint256 debt = _getFullDebt(currency);
+        if (debt > 0) {
+            _settle(currency, owner, debt);
+            return;
+        }
+
+        uint256 credit = _getFullCredit(currency);
+        if (credit > 0) {
+            _take(currency, owner, credit);
+        }
+
+        _close(currency, owner);
+    }
+
     // ─────────────────────────────────────────────────────────────────────────
     // ERC721 tokenURI implementation
     // ─────────────────────────────────────────────────────────────────────────
@@ -701,5 +733,17 @@ contract UnibuyOrderManager is
             compressed++;
         }
         return compressed * tickSpacing;
+    }
+
+    /// @dev Close this contract's transient delta for `currency` against `owner`.
+    ///      Mirrors v4-periphery PositionManager _close semantics.
+    function _close(Currency currency, address owner) internal {
+        int256 currencyDelta = poolManager.currencyDelta(address(this), currency);
+
+        if (currencyDelta < 0) {
+            _settle(currency, owner, uint256(-currencyDelta));
+        } else {
+            _take(currency, owner, uint256(currencyDelta));
+        }
     }
 }

@@ -87,4 +87,11 @@ library Actions {
     /// @dev params: abi.encode(Currency currency0, Currency currency1, address recipient)
     ///   Returns: ""
     uint8 internal constant TAKE_PAIR  = 0x15;
+
+    /// @notice Close this contract's transient delta for a currency using an explicit owner as payer/recipient.
+    /// @dev params: abi.encode(Currency currency, address owner)
+    ///   If delta < 0: settles debt from owner.
+    ///   If delta > 0: takes credit to owner.
+    ///   Returns: ""
+    uint8 internal constant CLOSE_CURRENCY = 0x16;
 }

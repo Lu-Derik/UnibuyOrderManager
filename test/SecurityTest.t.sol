@@ -251,12 +251,13 @@ contract SecurityTest is OrderManagerTestBase {
 
         // Bob closes alice's order
         vm.startPrank(bob);
-        uint256 t0Before = tokenA.balanceOf(bob);
+        uint256 aliceT0Before = tokenA.balanceOf(alice);
+        uint256 bobT0Before = tokenA.balanceOf(bob);
         orderManager.closeOrder(tokenId, block.timestamp + 1 hours);
         vm.stopPrank();
-        uint256 t0 = tokenA.balanceOf(bob) - t0Before;
-        assertGt(t0, 0, "approved operator should receive token0");
-        assertEq(tokenA.balanceOf(bob), t0Before + t0, "bob balance should increase");
+        uint256 aliceT0Received = tokenA.balanceOf(alice) - aliceT0Before;
+        assertGt(aliceT0Received, 0, "token owner should receive token0");
+        assertEq(tokenA.balanceOf(bob), bobT0Before, "operator should not receive proceeds");
 
         // NFT must be burned
         vm.expectRevert();
@@ -274,11 +275,13 @@ contract SecurityTest is OrderManagerTestBase {
 
         // Carol closes alice's order
         vm.startPrank(carol);
-        uint256 t0Before = tokenA.balanceOf(carol);
+        uint256 aliceT0Before = tokenA.balanceOf(alice);
+        uint256 carolT0Before = tokenA.balanceOf(carol);
         orderManager.closeOrder(tokenId, block.timestamp + 1 hours);
         vm.stopPrank();
-        uint256 t0 = tokenA.balanceOf(carol) - t0Before;
-        assertGt(t0, 0, "operator-for-all should receive token0");
+        uint256 aliceT0Received = tokenA.balanceOf(alice) - aliceT0Before;
+        assertGt(aliceT0Received, 0, "token owner should receive token0");
+        assertEq(tokenA.balanceOf(carol), carolT0Before, "operator should not receive proceeds");
 
         // NFT must be burned
         vm.expectRevert();
@@ -321,11 +324,13 @@ contract SecurityTest is OrderManagerTestBase {
 
         // Bob can now close the order
         vm.startPrank(bob);
-        uint256 t0Before = tokenA.balanceOf(bob);
+        uint256 ownerT0Before = tokenA.balanceOf(aliceSigner);
+        uint256 bobT0Before = tokenA.balanceOf(bob);
         orderManager.closeOrder(tokenId, block.timestamp + 1 hours);
         vm.stopPrank();
-        uint256 t0 = tokenA.balanceOf(bob) - t0Before;
-        assertGt(t0, 0, "permit-approved spender should receive token0");
+        uint256 ownerT0Received = tokenA.balanceOf(aliceSigner) - ownerT0Before;
+        assertGt(ownerT0Received, 0, "token owner should receive token0");
+        assertEq(tokenA.balanceOf(bob), bobT0Before, "permit operator should not receive proceeds");
     }
 
     /// @dev A caller with no approval cannot close — must revert with NotOwnerNorApproved.

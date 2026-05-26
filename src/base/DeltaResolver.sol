@@ -13,6 +13,7 @@ import {ImmutableState} from "./ImmutableState.sol";
 ///         (which uses `pull` instead of `take`).
 abstract contract DeltaResolver is ImmutableState {
     using CurrencyLibrary for Currency;
+    using TransientStateLibrary for IUnibuyPoolManager;
 
     /// @notice Pull an amount of currency out of the PoolManager to a recipient
     /// @param currency Currency to pull
@@ -53,7 +54,7 @@ abstract contract DeltaResolver is ImmutableState {
     /// @notice Returns the full outstanding debt (negative delta) owed to the pool for `currency`.
     /// @dev    Returns 0 if the delta is non-negative (no debt).
     function _getFullDebt(Currency currency) internal view returns (uint256) {
-        int256 delta = TransientStateLibrary.currencyDelta(poolManager, address(this), currency);
+        int256 delta = poolManager.currencyDelta(address(this), currency);
         return delta < 0 ? uint256(-delta) : 0;
     }
 
@@ -61,7 +62,7 @@ abstract contract DeltaResolver is ImmutableState {
     ///         for `currency`.
     /// @dev    Returns 0 if the delta is non-positive (no credit).
     function _getFullCredit(Currency currency) internal view returns (uint256) {
-        int256 delta = TransientStateLibrary.currencyDelta(poolManager, address(this), currency);
+        int256 delta = poolManager.currencyDelta(address(this), currency);
         return delta > 0 ? uint256(delta) : 0;
     }
 }

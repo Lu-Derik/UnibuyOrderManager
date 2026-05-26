@@ -186,8 +186,10 @@ interface IUnibuyOrderManager {
         uint256 deadline
     ) external payable;
 
-    /// @notice Close (cancel) a maker order and withdraw all proceeds.
-    ///         Burns the NFT.  Caller must be current NFT owner.
+    /// @notice Close (cancel) a maker order and settle/withdraw against the current NFT owner.
+    ///         Burns the NFT.
+    ///         If token1 delta is negative due to compensation, token1 is settled from owner.
+    ///         Any positive deltas are transferred to owner.
     ///
     function closeOrder(
         uint256 tokenId,

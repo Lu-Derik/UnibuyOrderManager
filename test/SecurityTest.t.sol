@@ -18,7 +18,7 @@ import {PoolFeeLibrary}  from "@unibuy/libraries/PoolFeeLibrary.sol";
 // ─────────────────────────────────────────────────────────────────────────────
 
 /// @dev Which orderManager entry-point the hook will attempt to re-enter.
-enum AttackType { TAKER_ORDER, PLACE_MAKER_ORDER, CLOSE_MAKER_ORDER, MIXED_ORDER }
+enum AttackType { TAKER_ORDER, PLACE_MAKER_ORDER, CLOSE_MAKER_ORDER }
 
 contract ReentrantERC20 {
     string  public name;
@@ -33,32 +33,30 @@ contract ReentrantERC20 {
     event Approval(address indexed owner, address indexed spender, uint256 value);
 
     UnibuyOrderManager public target;
-    UnibuyPoolKey      public attackKey;        // pool to pass to the reentrant call
+    UnibuyPoolKey      public attackKey;
     AttackType         public attackType;
     bool               private _inHook;
-
-    /// @notice Set to true when the reentrant call reverted with ContractLocked.
     bool public reentrantCallReverted;
 
     constructor(string memory _name, string memory _symbol) {
-        name     = _name;
-        symbol   = _symbol;
+        name = _name;
+        symbol = _symbol;
         decimals = 18;
     }
 
     function setTarget(
-        UnibuyOrderManager  _target,
+        UnibuyOrderManager _target,
         UnibuyPoolKey calldata _key,
-        AttackType            _type
+        AttackType _type
     ) external {
-        target     = _target;
-        attackKey  = _key;
+        target = _target;
+        attackKey = _key;
         attackType = _type;
     }
 
     function mint(address to, uint256 amount) external {
         balanceOf[to] += amount;
-        totalSupply    += amount;
+        totalSupply += amount;
         emit Transfer(address(0), to, amount);
     }
 
@@ -73,7 +71,6 @@ contract ReentrantERC20 {
         return true;
     }
 
-    /// @dev The hook fires after the transfer completes to simulate a reentrant attack.
     function transferFrom(address from, address to, uint256 amount) external returns (bool) {
         uint256 allowed = allowance[from][msg.sender];
         if (allowed != type(uint256).max) {
@@ -96,32 +93,27 @@ contract ReentrantERC20 {
                 )
             );
         } else if (attackType == AttackType.PLACE_MAKER_ORDER) {
+            uint256 orderInfo = _encodeOrderInfo(60, 120, -120, -60, true, false);
             (success, revertData) = address(target).call(
                 abi.encodeCall(
                     target.placeOrderNoTake,
-                    (attackKey, int24(60), int24(120), uint128(1), block.timestamp + 1 hours)
+                    (attackKey, orderInfo, uint128(1), block.timestamp + 1 hours)
                 )
             );
-        } else if (attackType == AttackType.CLOSE_MAKER_ORDER) {
-            // tokenId 9999 likely doesn't exist, but ContractLocked fires first
+        } else {
             (success, revertData) = address(target).call(
                 abi.encodeCall(
-                    target.closeMakerOrder,
-                    (9999, attackKey, block.timestamp + 1 hours)
-                )
-            );
-        } else if (attackType == AttackType.MIXED_ORDER) {
-            (success, revertData) = address(target).call(
-                abi.encodeCall(
-                    target.mixedOrder,
-                    (attackKey, 0, type(uint160).max, attackKey, int24(60), int24(120), uint128(0), from, block.timestamp + 1 hours)
+                    target.closeOrder,
+                    (9999, block.timestamp + 1 hours)
                 )
             );
         }
 
         if (!success && revertData.length >= 4) {
             bytes4 sel;
-            assembly { sel := mload(add(revertData, 32)) }
+            assembly {
+                sel := mload(add(revertData, 32))
+            }
             if (sel == bytes4(keccak256("ContractLocked()"))) {
                 reentrantCallReverted = true;
             }
@@ -131,10 +123,27 @@ contract ReentrantERC20 {
         return true;
     }
 
+    function _encodeOrderInfo(
+        int24 tickLower,
+        int24 tickUpper,
+        int24 tickLowerMirror,
+        int24 tickUpperMirror,
+        bool chained,
+        bool autoClose
+    ) internal pure returns (uint256) {
+        uint256 flags = (chained ? 1 : 0) | (autoClose ? 2 : 0);
+        return
+            flags |
+            (uint256(uint24(tickLower)) << 8) |
+            (uint256(uint24(tickUpper)) << 32) |
+            (uint256(uint24(tickLowerMirror)) << 56) |
+            (uint256(uint24(tickUpperMirror)) << 80);
+    }
+
     function _transferRaw(address from, address to, uint256 amount) internal {
         require(balanceOf[from] >= amount, "ReentrantERC20: balance");
         balanceOf[from] -= amount;
-        balanceOf[to]   += amount;
+        balanceOf[to] += amount;
         emit Transfer(from, to, amount);
     }
 }
@@ -178,7 +187,10 @@ contract SecurityTest is OrderManagerTestBase {
         tokenA.approve(address(orderManager), type(uint256).max);
         vm.prank(alice);
         orderManager.placeOrderNoTake(
-            malPool, TL, TU, uint128(LIQ), block.timestamp + 1 hours
+            malPool,
+            _encodeOrderInfo(TL, TU, -TU, -TL, true, false),
+            uint128(LIQ),
+            block.timestamp + 1 hours
         );
 
         // Attacker (dave) gets malToken and approves orderManager
@@ -202,7 +214,7 @@ contract SecurityTest is OrderManagerTestBase {
     // Fix #1 + #2 — Locker non-zero slot & isNotLocked applied to all entry points
     //
     // Each test exercises a different entry-point as the target of the reentrant
-    // call.  ContractLocked must be returned for ALL four functions, proving that
+    // call.  ContractLocked must be returned for all tested entry functions, proving that
     // (a) the lock mechanism works and (b) isNotLocked guards every entry point.
     // ─────────────────────────────────────────────────────────────────────────
 
@@ -224,12 +236,6 @@ contract SecurityTest is OrderManagerTestBase {
         assertTrue(mal.reentrantCallReverted(), "closeMakerOrder: expected ContractLocked on reentrant call");
     }
 
-    /// @dev Reentrant call to mixedOrder is blocked.
-    function test_isNotLocked_mixedOrder_blocksReentrant() public {
-        ReentrantERC20 mal = _setupAndAttack(AttackType.MIXED_ORDER);
-        assertTrue(mal.reentrantCallReverted(), "mixedOrder: expected ContractLocked on reentrant call");
-    }
-
     // ─────────────────────────────────────────────────────────────────────────
     // Fix #3 — closeMakerOrder now uses _isApprovedOrOwner
     // ─────────────────────────────────────────────────────────────────────────
@@ -246,7 +252,7 @@ contract SecurityTest is OrderManagerTestBase {
         // Bob closes alice's order
         vm.startPrank(bob);
         uint256 t0Before = tokenA.balanceOf(bob);
-        orderManager.closeMakerOrder(tokenId, poolKey, block.timestamp + 1 hours);
+        orderManager.closeOrder(tokenId, block.timestamp + 1 hours);
         vm.stopPrank();
         uint256 t0 = tokenA.balanceOf(bob) - t0Before;
         assertGt(t0, 0, "approved operator should receive token0");
@@ -269,7 +275,7 @@ contract SecurityTest is OrderManagerTestBase {
         // Carol closes alice's order
         vm.startPrank(carol);
         uint256 t0Before = tokenA.balanceOf(carol);
-        orderManager.closeMakerOrder(tokenId, poolKey, block.timestamp + 1 hours);
+        orderManager.closeOrder(tokenId, block.timestamp + 1 hours);
         vm.stopPrank();
         uint256 t0 = tokenA.balanceOf(carol) - t0Before;
         assertGt(t0, 0, "operator-for-all should receive token0");
@@ -288,9 +294,14 @@ contract SecurityTest is OrderManagerTestBase {
         tokenA.approve(address(orderManager), type(uint256).max);
 
         // Place order as aliceSigner
-        uint256 tokenId = orderManager.nextTokenId();
+        uint256 tokenId = orderManager.lastTokenId() + 1;
         vm.prank(aliceSigner);
-        orderManager.placeOrderNoTake(poolKey, TL, TU, uint128(LIQ), block.timestamp + 1 hours);
+        orderManager.placeOrderNoTake(
+            poolKey,
+            _encodeOrderInfo(TL, TU, -TU, -TL, true, false),
+            uint128(LIQ),
+            block.timestamp + 1 hours
+        );
         assertEq(orderManager.ownerOf(tokenId), aliceSigner);
 
         // aliceSigner signs a permit allowing bob to manage tokenId
@@ -311,7 +322,7 @@ contract SecurityTest is OrderManagerTestBase {
         // Bob can now close the order
         vm.startPrank(bob);
         uint256 t0Before = tokenA.balanceOf(bob);
-        orderManager.closeMakerOrder(tokenId, poolKey, block.timestamp + 1 hours);
+        orderManager.closeOrder(tokenId, block.timestamp + 1 hours);
         vm.stopPrank();
         uint256 t0 = tokenA.balanceOf(bob) - t0Before;
         assertGt(t0, 0, "permit-approved spender should receive token0");
@@ -329,7 +340,7 @@ contract SecurityTest is OrderManagerTestBase {
                 alice
             )
         );
-        orderManager.closeMakerOrder(tokenId, poolKey, block.timestamp + 1 hours);
+        orderManager.closeOrder(tokenId, block.timestamp + 1 hours);
     }
 
     /// @dev Approval granted then revoked via setApprovalForAll should NOT allow close.
@@ -351,7 +362,7 @@ contract SecurityTest is OrderManagerTestBase {
                 alice
             )
         );
-        orderManager.closeMakerOrder(tokenId, poolKey, block.timestamp + 1 hours);
+        orderManager.closeOrder(tokenId, block.timestamp + 1 hours);
     }
 
     // ─────────────────────────────────────────────────────────────────────────
@@ -375,7 +386,10 @@ contract SecurityTest is OrderManagerTestBase {
         tokenA.approve(address(orderManager), type(uint256).max);
         vm.prank(alice);
         orderManager.placeOrderNoTake(
-            nativePool, TL, TU, uint128(LIQ), block.timestamp + 1 hours
+            nativePool,
+            _encodeOrderInfo(TL, TU, -TU, -TL, true, false),
+            uint128(LIQ),
+            block.timestamp + 1 hours
         );
 
         // ── Taker: Dave buys tokenA by paying native ETH ──────────────────────

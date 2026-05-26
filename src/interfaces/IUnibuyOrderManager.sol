@@ -18,7 +18,6 @@ import {PathKey} from "../libraries/PathKey.sol";
 /// Order types:
 ///   • Taker order  — immediate swap on the provided pool key.
 ///   • Maker order  — passive limit order on the provided pool key, represented as ERC-721 NFT.
-///   • Mixed order  — atomic taker then optional maker with both pool keys provided explicitly.
 interface IUnibuyOrderManager {
 
     // ─────────────────────────────────────────────────────────────────────────
@@ -27,7 +26,7 @@ interface IUnibuyOrderManager {
 
     /// @notice Metadata stored for each maker order NFT.
     /// @dev    Packs into a single 32-byte storage slot:
-    ///         bool active (1) + int24 tickLower (3) + int24 tickUpper (3)
+    ///         flags uint8 (1, bit0: chained, bit1: auto) + int24 tickLower (3) + int24 tickUpper (3)
     ///         + int24 tickLowerMirror (3) + int24 tickUpperMirror (3) + bytes19 poolId (19).
     struct OrderInfo {
         bytes19 poolId;    // first 19 bytes of keccak256(abi.encode(UnibuyPoolKey))
@@ -35,7 +34,8 @@ interface IUnibuyOrderManager {
         int24   tickUpper; // in resolved pool terms
         int24   tickLowerMirror; // corresponding mirror-pool lower tick
         int24   tickUpperMirror; // corresponding mirror-pool upper tick
-        bool    active;
+        bool    chained;
+        bool    autoClose;
     }
 
     // ─────────────────────────────────────────────────────────────────────────
@@ -160,15 +160,14 @@ interface IUnibuyOrderManager {
     /// @notice Place a maker (limit) order on the provided pool key. Mints an ERC-721 NFT.
     ///
     /// @param key        Resolved pool key to place into (forward or mirror).
-    /// @param tickLower  Lower tick in the SAME pool key's terms.
-    /// @param tickUpper  Upper tick in the SAME pool key's terms.
+    /// @param orderInfo  Packed order metadata in OrderInfoLibrary layout (poolId ignored on input).
+    ///                   Encodes tickLower/tickUpper/tickLowerMirror/tickUpperMirror/chained/auto.
     /// @param liquidity  Virtual liquidity to provide.
     /// @param deadline   Expiry timestamp.
     ///
     function placeOrderNoTake(
         UnibuyPoolKey calldata key,
-        int24   tickLower,
-        int24   tickUpper,
+        uint256 orderInfo,
         uint128 liquidity,
         uint256 deadline
     ) external payable;
@@ -176,14 +175,13 @@ interface IUnibuyOrderManager {
     /// @notice Place maker order using a token0 budget; optionally consumes part of it via mirror take first.
     ///
     /// @param key        Resolved pool key to place into.
-    /// @param tickLower  Lower tick in key terms.
-    /// @param tickUpper  Upper tick in key terms.
+    /// @param orderInfo  Packed order metadata in OrderInfoLibrary layout (poolId ignored on input).
+    ///                   Encodes tickLower/tickUpper/tickLowerMirror/tickUpperMirror/chained/auto.
     /// @param amount0    Total token0 budget provided by user.
     /// @param deadline   Expiry timestamp.
     function placeOrderWithTake(
         UnibuyPoolKey calldata key,
-        int24 tickLower,
-        int24 tickUpper,
+        uint256 orderInfo,
         uint256 amount0,
         uint256 deadline
     ) external payable;
@@ -191,38 +189,8 @@ interface IUnibuyOrderManager {
     /// @notice Close (cancel) a maker order and withdraw all proceeds.
     ///         Burns the NFT.  Caller must be current NFT owner.
     ///
-    function closeMakerOrder(
-        uint256             tokenId,
-        UnibuyPoolKey calldata key,
-        uint256             deadline
-    ) external;
-
-    // ─────────────────────────────────────────────────────────────────────────
-    // Mixed order
-    // ─────────────────────────────────────────────────────────────────────────
-
-    /// @notice Atomic taker + optional maker in one transaction.
-    ///
-    /// @param takerKey            Resolved pool key used for the taker step.
-    /// @param takerAmountIn       Input token for the taker step (0 → skip taker).
-    /// @param takerPriceLimitX96  Price limit for the taker step in takerKey sqrt terms.
-    ///                            Must be >= current. Pass 1 for no limit.
-    /// @param makerKey            Resolved pool key used for the maker step.
-    /// @param makerTickLower      Lower tick for the maker step in makerKey terms.
-    /// @param makerTickUpper      Upper tick for the maker step in makerKey terms.
-    /// @param makerLiquidity      Liquidity for the maker step (0 → skip maker).
-    /// @param recipient           Receives the output token from the taker step.
-    /// @param deadline            Expiry timestamp.
-    ///
-    function mixedOrder(
-        UnibuyPoolKey calldata takerKey,
-        uint256 takerAmountIn,
-        uint160 takerPriceLimitX96,
-        UnibuyPoolKey calldata makerKey,
-        int24   makerTickLower,
-        int24   makerTickUpper,
-        uint128 makerLiquidity,
-        address recipient,
+    function closeOrder(
+        uint256 tokenId,
         uint256 deadline
     ) external;
 
@@ -260,5 +228,5 @@ interface IUnibuyOrderManager {
     function getMakerOrder(uint256 tokenId)
         external view returns (OrderInfo memory);
 
-    function nextTokenId() external view returns (uint256);
+    function lastTokenId() external view returns (uint256);
 }

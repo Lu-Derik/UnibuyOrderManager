@@ -40,16 +40,14 @@ library CalldataDecoder {
 
     struct PlaceOrderParams {
         UnibuyPoolKey poolKey;
-        int24 tickLower;
-        int24 tickUpper;
+        uint256 orderInfo;
         uint128 liquidity;
         address owner;
     }
 
     struct PlaceOrderWithTakeParams {
         UnibuyPoolKey poolKey;
-        int24 tickLower;
-        int24 tickUpper;
+        uint256 orderInfo;
         uint256 amount0;
         address owner;
     }
@@ -168,14 +166,14 @@ library CalldataDecoder {
         }
     }
 
-    /// @dev equivalent to abi.decode(params, (UnibuyPoolKey, int24, int24, uint128, address))
+    /// @dev equivalent to abi.decode(params, (UnibuyPoolKey, uint256, uint128, address))
     function decodePlaceMakerParams(bytes calldata params)
         internal
         pure
         returns (PlaceOrderParams calldata placeParams)
     {
         assembly ("memory-safe") {
-            if lt(params.length, 0xe0) {
+            if lt(params.length, 0xc0) {
                 mstore(0, SLICE_ERROR_SELECTOR)
                 revert(0x1c, 4)
             }
@@ -183,14 +181,14 @@ library CalldataDecoder {
         }
     }
 
-    /// @dev equivalent to abi.decode(params, (UnibuyPoolKey, int24, int24, uint256, address))
+    /// @dev equivalent to abi.decode(params, (UnibuyPoolKey, uint256, uint256, address))
     function decodePlaceOrderWithTakeParams(bytes calldata params)
         internal
         pure
         returns (PlaceOrderWithTakeParams calldata placeParams)
     {
         assembly ("memory-safe") {
-            if lt(params.length, 0xe0) {
+            if lt(params.length, 0xc0) {
                 mstore(0, SLICE_ERROR_SELECTOR)
                 revert(0x1c, 4)
             }

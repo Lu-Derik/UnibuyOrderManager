@@ -347,8 +347,9 @@ contract TakerOrderTest is OrderManagerTestBase {
         tokenC.mint(alice, 10_000_000 ether);
         vm.prank(alice);
         tokenC.approve(address(orderManager), type(uint256).max);
+        uint256 orderInfo = _encodeOrderInfo(TL, TU, -TU, -TL, true, false);
         vm.prank(alice);
-        orderManager.placeOrderNoTake(zPool, TL, TU, LIQ, block.timestamp + 1 hours);
+        orderManager.placeOrderNoTake(zPool, orderInfo, LIQ, block.timestamp + 1 hours);
 
         currencyIn = Currency.wrap(address(tokenB));
         currencyOut = Currency.wrap(address(tokenC));
@@ -474,6 +475,46 @@ contract TakerOrderTest is OrderManagerTestBase {
             )
         );
         orderManager.takeOrderOutput(currencyOut, path, dave, amountOut, actualIn - 1, block.timestamp + 1 hours);
+    }
+
+    function test_takeOrderInput_revert_invalidPath() public {
+        PathKey[] memory emptyPath = new PathKey[](0);
+
+        vm.prank(dave);
+        vm.expectRevert(abi.encodeWithSelector(bytes4(keccak256("InvalidPath()"))));
+        orderManager.takeOrderInput(
+            Currency.wrap(address(tokenB)),
+            emptyPath,
+            dave,
+            1e15,
+            0,
+            block.timestamp + 1 hours
+        );
+    }
+
+    function test_takeOrderOutput_revert_invalidPath() public {
+        PathKey[] memory emptyPath = new PathKey[](0);
+
+        vm.prank(dave);
+        vm.expectRevert(abi.encodeWithSelector(bytes4(keccak256("InvalidPath()"))));
+        orderManager.takeOrderOutput(
+            Currency.wrap(address(tokenA)),
+            emptyPath,
+            dave,
+            1e15,
+            type(uint256).max,
+            block.timestamp + 1 hours
+        );
+    }
+
+    function test_execute_revert_invalidActionType() public {
+        bytes memory actions = abi.encodePacked(bytes1(uint8(255)));
+        bytes[] memory params = new bytes[](1);
+        params[0] = bytes("");
+
+        vm.prank(dave);
+        vm.expectRevert(abi.encodeWithSelector(bytes4(keccak256("InvalidActionType(uint8)")), uint8(255)));
+        orderManager.execute(actions, params, block.timestamp + 1 hours);
     }
 
     function test_execute_openDelta_takeOrderInputSingle_consumesFullCredit() public {

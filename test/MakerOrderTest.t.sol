@@ -20,7 +20,7 @@ contract MakerOrderTest is OrderManagerTestBase {
     // ─────────────────────────────────────────────────────────────────────────
 
     function test_placeSellOrder_mintsNFT() public {
-        uint256 nextId = orderManager.nextTokenId();
+        uint256 nextId = orderManager.lastTokenId() + 1;
         (uint256 tokenId,) = _placeSellOrder(alice, TL, TU, LIQ);
         assertEq(tokenId, nextId,   "unexpected token ID");
         assertEq(orderManager.ownerOf(tokenId), alice, "alice should own NFT");
@@ -31,7 +31,7 @@ contract MakerOrderTest is OrderManagerTestBase {
         IUnibuyOrderManager.OrderInfo memory rec = orderManager.getMakerOrder(tokenId);
         assertEq(rec.tickLower, TL,  "tickLower mismatch");
         assertEq(rec.tickUpper, TU,  "tickUpper mismatch");
-        assertTrue(rec.active,       "should be active");
+        assertTrue(rec.chained,      "should be chained");
         assertEq(rec.poolId, bytes19(UnibuyPoolId.unwrap(poolKey.toId())), "should be forward pool (sell order)");
     }
 
@@ -44,17 +44,18 @@ contract MakerOrderTest is OrderManagerTestBase {
         uint256 _tid = tokenId; _tid = _tid;
     }
 
-    function test_placeSellOrder_nextTokenIdIncrements() public {
-        uint256 id1Before = orderManager.nextTokenId();
+    function test_placeSellOrder_lastTokenIdIncrements() public {
+        uint256 id1Before = orderManager.lastTokenId();
         _placeSellOrder(alice, TL, TU, LIQ);
-        uint256 id2 = orderManager.nextTokenId();
-        assertEq(id2, id1Before + 1, "nextTokenId not incremented");
+        uint256 id2 = orderManager.lastTokenId();
+        assertEq(id2, id1Before + 1, "lastTokenId not incremented");
     }
 
     function test_placeSellOrder_revert_deadline() public {
+        uint256 orderInfo = _encodeOrderInfo(TL, TU, -TU, -TL, true, false);
         vm.prank(alice);
         vm.expectRevert(abi.encodeWithSelector(bytes4(keccak256("DeadlinePassed()"))));
-        orderManager.placeOrderNoTake(poolKey, TL, TU, LIQ, block.timestamp - 1);
+        orderManager.placeOrderNoTake(poolKey, orderInfo, LIQ, block.timestamp - 1);
     }
 
     // Multiple sell orders from different makers
@@ -75,7 +76,7 @@ contract MakerOrderTest is OrderManagerTestBase {
 
     // Buy order: forward tick range below current tick (current=0, use [-180, -60])
     function test_placeBuyOrder_mintsNFT() public {
-        uint256 nextId = orderManager.nextTokenId();
+        uint256 nextId = orderManager.lastTokenId() + 1;
         (uint256 tokenId,) = _placeBuyOrder(alice, -TU, -TL, LIQ);
         assertEq(tokenId, nextId,  "unexpected token ID");
         assertEq(orderManager.ownerOf(tokenId), alice, "alice should own NFT");
@@ -88,7 +89,7 @@ contract MakerOrderTest is OrderManagerTestBase {
         assertEq(rec.tickLower,  TL,   "mirrorTickLower should be -fwdTickUpper = TL");
         assertEq(rec.tickUpper,  TU,   "mirrorTickUpper should be -fwdTickLower = TU");
         assertEq(rec.poolId, bytes19(UnibuyPoolId.unwrap(mirrorKey.toId())), "should be mirror pool (buy order)");
-        assertTrue(rec.active,         "should be active");
+        assertTrue(rec.chained,        "should be chained");
     }
 
     function test_placeBuyOrder_tokenBDeducted() public {
@@ -100,17 +101,19 @@ contract MakerOrderTest is OrderManagerTestBase {
     }
 
     function test_placeBuyOrder_revert_deadline() public {
+        uint256 orderInfo = _encodeOrderInfo(TL, TU, -TU, -TL, true, false);
         vm.prank(alice);
         vm.expectRevert(abi.encodeWithSelector(bytes4(keccak256("DeadlinePassed()"))));
-        orderManager.placeOrderNoTake(mirrorKey, TL, TU, LIQ, block.timestamp - 1);
+        orderManager.placeOrderNoTake(mirrorKey, orderInfo, LIQ, block.timestamp - 1);
     }
 
     function test_placeOrderWithTake_mintsNftAndDepositsToken0() public {
         uint256 beforeA = tokenA.balanceOf(alice);
-        uint256 beforeId = orderManager.nextTokenId();
+        uint256 beforeId = orderManager.lastTokenId() + 1;
+        uint256 orderInfo = _encodeOrderInfo(TL, TU, -TU, -TL, true, false);
 
         vm.prank(alice);
-        orderManager.placeOrderWithTake(poolKey, TL, TU, 1e18, block.timestamp + 1 hours);
+        orderManager.placeOrderWithTake(poolKey, orderInfo, 1e18, block.timestamp + 1 hours);
 
         assertEq(orderManager.ownerOf(beforeId), alice, "alice should own nft");
         assertLt(tokenA.balanceOf(alice), beforeA, "token0 should be spent");
@@ -123,13 +126,26 @@ contract MakerOrderTest is OrderManagerTestBase {
         // tickLower below current forward price => mirror threshold above current mirror price.
         int24 lower = -120;
         int24 upper = 120;
+        uint256 orderInfo = _encodeOrderInfo(lower, upper, -upper, -lower, true, false);
 
         uint256 beforeB = tokenB.balanceOf(alice);
 
         vm.prank(alice);
-        orderManager.placeOrderWithTake(poolKey, lower, upper, 2e18, block.timestamp + 1 hours);
+        orderManager.placeOrderWithTake(poolKey, orderInfo, 2e18, block.timestamp + 1 hours);
 
         assertGt(tokenB.balanceOf(alice), beforeB, "mirror pre-take should credit token1");
+    }
+
+    function test_placeOrderWithTake_zeroAmount_doesNotMint() public {
+        uint256 beforeId = orderManager.lastTokenId();
+        uint256 beforeA = tokenA.balanceOf(alice);
+        uint256 orderInfo = _encodeOrderInfo(TL, TU, -TU, -TL, true, false);
+
+        vm.prank(alice);
+        orderManager.placeOrderWithTake(poolKey, orderInfo, 0, block.timestamp + 1 hours);
+
+        assertEq(orderManager.lastTokenId(), beforeId, "zero amount should not mint a new NFT");
+        assertEq(tokenA.balanceOf(alice), beforeA, "zero amount should not spend token0");
     }
 
     // ─────────────────────────────────────────────────────────────────────────
@@ -166,7 +182,7 @@ contract MakerOrderTest is OrderManagerTestBase {
         _closeOrder(alice, tokenId);
 
         IUnibuyOrderManager.OrderInfo memory rec = orderManager.getMakerOrder(tokenId);
-        assertFalse(rec.active, "order should be inactive after close");
+        assertFalse(rec.chained, "order should be unchained after close");
     }
 
     function test_closeSellOrder_partialFill() public {
@@ -225,7 +241,7 @@ contract MakerOrderTest is OrderManagerTestBase {
                 alice
             )
         );
-        orderManager.closeMakerOrder(tokenId, poolKey, block.timestamp + 1 hours);
+        orderManager.closeOrder(tokenId, block.timestamp + 1 hours);
     }
 
     function test_closeSellOrder_revert_alreadyClosed() public {
@@ -235,14 +251,38 @@ contract MakerOrderTest is OrderManagerTestBase {
         // NFT burned → ownerOf reverts first — that's fine, revert expected
         vm.prank(alice);
         vm.expectRevert();
-        orderManager.closeMakerOrder(tokenId, poolKey, block.timestamp + 1 hours);
+        orderManager.closeOrder(tokenId, block.timestamp + 1 hours);
     }
 
     function test_closeSellOrder_revert_deadline() public {
         (uint256 tokenId,) = _placeSellOrder(alice, TL, TU, LIQ);
         vm.prank(alice);
         vm.expectRevert(abi.encodeWithSelector(bytes4(keccak256("DeadlinePassed()"))));
-        orderManager.closeMakerOrder(tokenId, poolKey, block.timestamp - 1);
+        orderManager.closeOrder(tokenId, block.timestamp - 1);
+    }
+
+    function test_closeMakerOrder_usesStoredPoolNotCallerKey() public {
+        (uint256 tokenId,) = _placeSellOrder(alice, TL, TU, LIQ);
+
+        vm.prank(alice);
+        orderManager.closeOrder(tokenId, block.timestamp + 1 hours);
+
+        vm.expectRevert();
+        orderManager.ownerOf(tokenId);
+    }
+
+    function test_closeMakerOrder_clearsOrderInfoSlot() public {
+        (uint256 tokenId,) = _placeSellOrder(alice, TL, TU, LIQ);
+        _closeOrder(alice, tokenId);
+
+        IUnibuyOrderManager.OrderInfo memory rec = orderManager.getMakerOrder(tokenId);
+        assertEq(rec.poolId, bytes19(0), "poolId should be cleared");
+        assertEq(rec.tickLower, 0, "tickLower should be cleared");
+        assertEq(rec.tickUpper, 0, "tickUpper should be cleared");
+        assertEq(rec.tickLowerMirror, 0, "tickLowerMirror should be cleared");
+        assertEq(rec.tickUpperMirror, 0, "tickUpperMirror should be cleared");
+        assertFalse(rec.chained, "chained should be false after clear");
+        assertFalse(rec.autoClose, "autoClose should be false after clear");
     }
 
     // ─────────────────────────────────────────────────────────────────────────
@@ -260,7 +300,7 @@ contract MakerOrderTest is OrderManagerTestBase {
         // Alice can no longer close
         vm.prank(alice);
         vm.expectRevert();
-        orderManager.closeMakerOrder(tokenId, poolKey, block.timestamp + 1 hours);
+        orderManager.closeOrder(tokenId, block.timestamp + 1 hours);
 
         // Bob can close
         (uint256 t0Back,) = _closeOrder(bob, tokenId);
@@ -268,18 +308,22 @@ contract MakerOrderTest is OrderManagerTestBase {
     }
 
     // ─────────────────────────────────────────────────────────────────────────
-    // Sell order with full fill → close retrieves only token1
+    // Sell order with full fill + chained roll → close auto-places into mirror pool
     // ─────────────────────────────────────────────────────────────────────────
 
     function test_closeSellOrder_fullFill() public {
         (uint256 tokenId,) = _placeSellOrder(alice, TL, TU, LIQ);
+        uint256 lastIdBeforeClose = orderManager.lastTokenId();
 
         // Large taker buy sweeps past the range
         _takerBuy(dave, 100_000e18, TickMath.getSqrtPriceAtTick(TU + TICK_SPACING));
 
         (uint256 t0Back, uint256 t1Back) = _closeOrder(alice, tokenId);
 
-        assertGt(t1Back, 0, "alice should have earned token1");
+        assertEq(t1Back, 0, "token1 should be rolled into mirror order");
+        uint256 rolledTokenId = lastIdBeforeClose + 1;
+        assertEq(orderManager.lastTokenId(), rolledTokenId, "mirror roll should mint a new NFT");
+        assertEq(orderManager.ownerOf(rolledTokenId), alice, "rolled mirror order should belong to alice");
         // token0 may be non-zero due to protocol rounding but should be small
         assertLe(t0Back, 1e10, "after full fill, minimal token0 expected");
     }

@@ -13,6 +13,7 @@ import {StateLibrary}         from "@unibuy/libraries/StateLibrary.sol";
 import {TickMath}             from "@unibuy/libraries/TickMath.sol";
 
 import {UnibuyOrderManager}   from "../../src/UnibuyOrderManager.sol";
+import {PackedOrderInfo, OrderInfoLibrary} from "../../src/libraries/OrderInfoLibrary.sol";
 import {TestERC20}            from "./TestERC20.sol";
 import {IAllowanceTransfer}   from "permit2/interfaces/IAllowanceTransfer.sol";
 import {IWETH9}               from "../../src/interfaces/external/IWETH9.sol";
@@ -146,9 +147,17 @@ abstract contract OrderManagerTestBase is Test {
         // Ensure forward pool price is compatible with the tick range.
         _ensureMirrorPriceOk(tickLower);
 
-        tokenId = orderManager.nextTokenId();
+        tokenId = orderManager.lastTokenId() + 1;
+        uint256 orderInfo = _encodeOrderInfo(
+            tickLower,
+            tickUpper,
+            -tickUpper,
+            -tickLower,
+            true,
+            false
+        );
         vm.prank(maker);
-        orderManager.placeOrderNoTake(poolKey, tickLower, tickUpper, liquidity, block.timestamp + 1 hours);
+        orderManager.placeOrderNoTake(poolKey, orderInfo, liquidity, block.timestamp + 1 hours);
         compensation = 0;
     }
 
@@ -161,9 +170,17 @@ abstract contract OrderManagerTestBase is Test {
     ) internal returns (uint256 tokenId, uint96 compensation) {
         int24 mirrorTl = -tickUpper;
         int24 mirrorTu = -tickLower;
-        tokenId = orderManager.nextTokenId();
+        tokenId = orderManager.lastTokenId() + 1;
+        uint256 orderInfo = _encodeOrderInfo(
+            mirrorTl,
+            mirrorTu,
+            -mirrorTu,
+            -mirrorTl,
+            true,
+            false
+        );
         vm.prank(maker);
-        orderManager.placeOrderNoTake(mirrorKey, mirrorTl, mirrorTu, liquidity, block.timestamp + 1 hours);
+        orderManager.placeOrderNoTake(mirrorKey, orderInfo, liquidity, block.timestamp + 1 hours);
         compensation = 0;
     }
 
@@ -221,7 +238,7 @@ abstract contract OrderManagerTestBase is Test {
         uint256 token0Before = tokenA.balanceOf(maker);
         uint256 token1Before = tokenB.balanceOf(maker);
         vm.prank(maker);
-        orderManager.closeMakerOrder(tokenId, poolKey, block.timestamp + 1 hours);
+        orderManager.closeOrder(tokenId, block.timestamp + 1 hours);
         token0Amount = tokenA.balanceOf(maker) - token0Before;
         token1Amount = tokenB.balanceOf(maker) - token1Before;
     }
@@ -234,5 +251,24 @@ abstract contract OrderManagerTestBase is Test {
     ///      can be added if tick ranges in negative territory are tested.
     function _ensureMirrorPriceOk(int24 /*tickLower*/) internal pure {
         // No action required for tests using positive tick ranges.
+    }
+
+    function _encodeOrderInfo(
+        int24 tickLower,
+        int24 tickUpper,
+        int24 tickLowerMirror,
+        int24 tickUpperMirror,
+        bool chained,
+        bool autoClose
+    ) internal pure returns (uint256) {
+        PackedOrderInfo info =
+            OrderInfoLibrary.initialize(bytes19(0), tickLower, tickUpper, tickLowerMirror, tickUpperMirror);
+        if (!chained) {
+            info = info.setUnchained();
+        }
+        if (autoClose) {
+            info = info.setAuto();
+        }
+        return PackedOrderInfo.unwrap(info);
     }
 }

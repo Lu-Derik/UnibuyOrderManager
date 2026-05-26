@@ -27,11 +27,14 @@ interface IUnibuyOrderManager {
 
     /// @notice Metadata stored for each maker order NFT.
     /// @dev    Packs into a single 32-byte storage slot:
-    ///         bytes25 poolId (25) + int24 tickLower (3) + int24 tickUpper (3) + bool active (1).
+    ///         bool active (1) + int24 tickLower (3) + int24 tickUpper (3)
+    ///         + int24 tickLowerMirror (3) + int24 tickUpperMirror (3) + bytes19 poolId (19).
     struct OrderInfo {
-        bytes25 poolId;    // first 25 bytes of keccak256(abi.encode(UnibuyPoolKey))
+        bytes19 poolId;    // first 19 bytes of keccak256(abi.encode(UnibuyPoolKey))
         int24   tickLower; // in resolved pool terms
         int24   tickUpper; // in resolved pool terms
+        int24   tickLowerMirror; // corresponding mirror-pool lower tick
+        int24   tickUpperMirror; // corresponding mirror-pool upper tick
         bool    active;
     }
 

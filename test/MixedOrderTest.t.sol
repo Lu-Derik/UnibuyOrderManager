@@ -78,7 +78,7 @@ contract MixedOrderTest is OrderManagerTestBase {
         assertEq(orderManager.ownerOf(nextId), dave, "dave should own maker NFT");
 
         IUnibuyOrderManager.OrderInfo memory rec = orderManager.getMakerOrder(nextId);
-        assertEq(rec.poolId, bytes25(UnibuyPoolId.unwrap(mirrorKey.toId())), "should be mirror pool (buy order)");
+        assertEq(rec.poolId, bytes19(UnibuyPoolId.unwrap(mirrorKey.toId())), "should be mirror pool (buy order)");
         assertTrue(rec.active,     "should be active");
     }
 
@@ -110,7 +110,7 @@ contract MixedOrderTest is OrderManagerTestBase {
         assertEq(orderManager.ownerOf(nextId), dave, "dave should own maker NFT");
 
         IUnibuyOrderManager.OrderInfo memory rec = orderManager.getMakerOrder(nextId);
-        assertEq(rec.poolId, bytes25(UnibuyPoolId.unwrap(mirrorKey.toId())), "should be mirror pool (buy order)");
+        assertEq(rec.poolId, bytes19(UnibuyPoolId.unwrap(mirrorKey.toId())), "should be mirror pool (buy order)");
     }
 
     function test_mixedBuy_revert_buyPriceBelowCurrent() public {
@@ -198,7 +198,7 @@ contract MixedOrderTest is OrderManagerTestBase {
         assertEq(orderManager.ownerOf(nextId), dave);
 
         IUnibuyOrderManager.OrderInfo memory rec = orderManager.getMakerOrder(nextId);
-        assertEq(rec.poolId, bytes25(UnibuyPoolId.unwrap(poolKey.toId())), "should be forward pool (sell order)");
+        assertEq(rec.poolId, bytes19(UnibuyPoolId.unwrap(poolKey.toId())), "should be forward pool (sell order)");
         assertTrue(rec.active,      "should be active");
     }
 

@@ -60,9 +60,9 @@ contract UnibuyOrderManager is
     /// @dev Packed order metadata for each maker NFT. One 32-byte slot per order.
     mapping(uint256 tokenId => PackedOrderInfo) private _orders;
 
-    /// @notice Full UnibuyPoolKey for each pool, keyed by its truncated bytes25 pool ID.
+    /// @notice Full UnibuyPoolKey for each pool, keyed by its truncated bytes19 pool ID.
     ///         Populated on first placeOrder for a given pool (mirrors PositionManager.poolKeys).
-    mapping(bytes25 poolId => UnibuyPoolKey) public poolKeys;
+    mapping(bytes19 poolId => UnibuyPoolKey) public poolKeys;
 
     // ─────────────────────────────────────────────────────────────────────────
     // Constructor
@@ -291,7 +291,7 @@ contract UnibuyOrderManager is
         checkDeadline(deadline)
     {
         // Look up the stored pool key to determine settlement currencies for TAKE_PAIR.
-        bytes25 poolId = _orders[tokenId].poolId();
+        bytes19 poolId = _orders[tokenId].poolId();
         UnibuyPoolKey memory resolvedPool = poolKeys[poolId];
 
         bytes memory actions = abi.encodePacked(Actions.CLOSE_ORDER, Actions.TAKE_PAIR);
@@ -606,13 +606,15 @@ contract UnibuyOrderManager is
         // Mint the NFT to the recipient and record the order
         _mint(recipient, tokenId);
 
-        bytes25 poolId = bytes25(UnibuyPoolId.unwrap(poolKey.toId()));
+        bytes19 poolId = bytes19(UnibuyPoolId.unwrap(poolKey.toId()));
         // Store the full pool key on first sight
         if (poolKeys[poolId].tickSpacing == 0) {
             poolKeys[poolId] = poolKey;
         }
 
-        _orders[tokenId] = OrderInfoLibrary.initialize(poolId, tickLower, tickUpper);
+        int24 tickLowerMirror = -tickUpper;
+        int24 tickUpperMirror = -tickLower;
+        _orders[tokenId] = OrderInfoLibrary.initialize(poolId, tickLower, tickUpper, tickLowerMirror, tickUpperMirror);
     }
 
     /// @dev Closes a maker order. Contains all business logic (auth check, storage lookup/update,
@@ -631,7 +633,7 @@ contract UnibuyOrderManager is
         if (!orderInfo.active()) revert OrderNotActive(tokenId);
 
         // Derive direction: stored poolId != forward pool Id → mirror-pool order.
-        bool isMirrorOrder = (orderInfo.poolId() != bytes25(UnibuyPoolId.unwrap(key.toId())));
+        bool isMirrorOrder = (orderInfo.poolId() != bytes19(UnibuyPoolId.unwrap(key.toId())));
         int24 tickLower = orderInfo.tickLower();
         int24 tickUpper = orderInfo.tickUpper();
 

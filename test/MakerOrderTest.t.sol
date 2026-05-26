@@ -32,7 +32,7 @@ contract MakerOrderTest is OrderManagerTestBase {
         assertEq(rec.tickLower, TL,  "tickLower mismatch");
         assertEq(rec.tickUpper, TU,  "tickUpper mismatch");
         assertTrue(rec.active,       "should be active");
-        assertEq(rec.poolId, bytes25(UnibuyPoolId.unwrap(poolKey.toId())), "should be forward pool (sell order)");
+        assertEq(rec.poolId, bytes19(UnibuyPoolId.unwrap(poolKey.toId())), "should be forward pool (sell order)");
     }
 
     function test_placeSellOrder_tokenADeducted() public {
@@ -87,7 +87,7 @@ contract MakerOrderTest is OrderManagerTestBase {
         // Stored as mirror ticks: mirrorTl = -(-TL) = TL, mirrorTu = -(-TU) = TU
         assertEq(rec.tickLower,  TL,   "mirrorTickLower should be -fwdTickUpper = TL");
         assertEq(rec.tickUpper,  TU,   "mirrorTickUpper should be -fwdTickLower = TU");
-        assertEq(rec.poolId, bytes25(UnibuyPoolId.unwrap(mirrorKey.toId())), "should be mirror pool (buy order)");
+        assertEq(rec.poolId, bytes19(UnibuyPoolId.unwrap(mirrorKey.toId())), "should be mirror pool (buy order)");
         assertTrue(rec.active,         "should be active");
     }
 

@@ -96,7 +96,7 @@ contract ReentrantERC20 {
             uint256 orderInfo = _encodeOrderInfo(60, 120, -120, -60, true, false);
             (success, revertData) = address(target).call(
                 abi.encodeCall(
-                    target.placeOrderNoTake,
+                    target.makeOrder,
                     (attackKey, orderInfo, uint128(1), block.timestamp + 1 hours)
                 )
             );
@@ -186,7 +186,7 @@ contract SecurityTest is OrderManagerTestBase {
         vm.prank(alice);
         tokenA.approve(address(orderManager), type(uint256).max);
         vm.prank(alice);
-        orderManager.placeOrderNoTake(
+        orderManager.makeOrder(
             malPool,
             _encodeOrderInfo(TL, TU, -TU, -TL, true, false),
             uint128(LIQ),
@@ -224,10 +224,10 @@ contract SecurityTest is OrderManagerTestBase {
         assertTrue(mal.reentrantCallReverted(), "takerOrder: expected ContractLocked on reentrant call");
     }
 
-    /// @dev Reentrant call to placeMakerOrder is blocked.
+    /// @dev Reentrant call to makeOrder is blocked.
     function test_isNotLocked_placeMakerOrder_blocksReentrant() public {
         ReentrantERC20 mal = _setupAndAttack(AttackType.PLACE_MAKER_ORDER);
-        assertTrue(mal.reentrantCallReverted(), "placeMakerOrder: expected ContractLocked on reentrant call");
+        assertTrue(mal.reentrantCallReverted(), "makeOrder: expected ContractLocked on reentrant call");
     }
 
     /// @dev Reentrant call to closeMakerOrder is blocked.
@@ -299,7 +299,7 @@ contract SecurityTest is OrderManagerTestBase {
         // Place order as aliceSigner
         uint256 tokenId = orderManager.lastTokenId() + 1;
         vm.prank(aliceSigner);
-        orderManager.placeOrderNoTake(
+        orderManager.makeOrder(
             poolKey,
             _encodeOrderInfo(TL, TU, -TU, -TL, true, false),
             uint128(LIQ),
@@ -390,7 +390,7 @@ contract SecurityTest is OrderManagerTestBase {
         vm.prank(alice);
         tokenA.approve(address(orderManager), type(uint256).max);
         vm.prank(alice);
-        orderManager.placeOrderNoTake(
+        orderManager.makeOrder(
             nativePool,
             _encodeOrderInfo(TL, TU, -TU, -TL, true, false),
             uint128(LIQ),

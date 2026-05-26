@@ -63,7 +63,7 @@ contract UnibuyOrderManager is
     mapping(uint256 tokenId => PackedOrderInfo) private _orders;
 
     /// @notice Full UnibuyPoolKey for each pool, keyed by its truncated bytes19 pool ID.
-    ///         Populated on first placeOrder for a given pool (mirrors PositionManager.poolKeys).
+    ///         Populated on first makeOrder for a given pool (mirrors PositionManager.poolKeys).
     mapping(bytes19 poolId => UnibuyPoolKey) public poolKeys;
 
     // ─────────────────────────────────────────────────────────────────────────
@@ -236,7 +236,7 @@ contract UnibuyOrderManager is
     // ─────────────────────────────────────────────────────────────────────────
 
     /// @inheritdoc IUnibuyOrderManager
-    function placeOrderNoTake(
+    function makeOrder(
         UnibuyPoolKey calldata key,
         uint256 orderInfo,
         uint128 liquidity,
@@ -247,7 +247,7 @@ contract UnibuyOrderManager is
         isNotLocked
         checkDeadline(deadline)
     {
-        bytes memory actions = abi.encodePacked(Actions.PLACE_ORDER, Actions.SETTLE_ALL);
+        bytes memory actions = abi.encodePacked(Actions.MAKE_ORDER, Actions.SETTLE_ALL);
         bytes[] memory params = new bytes[](2);
         params[0] = abi.encode(key, orderInfo, liquidity, msg.sender);
         params[1] = abi.encode(key.currency0);
@@ -256,7 +256,7 @@ contract UnibuyOrderManager is
     }
 
     /// @inheritdoc IUnibuyOrderManager
-    function placeOrderWithTake(
+    function makeOrderWithTake(
         UnibuyPoolKey calldata key,
         uint256 orderInfo,
         uint256 amount0,
@@ -268,7 +268,7 @@ contract UnibuyOrderManager is
         checkDeadline(deadline)
     {
         bytes memory actions = abi.encodePacked(
-            Actions.PLACE_ORDER_WITH_TAKE,
+            Actions.MAKE_ORDER_WITH_TAKE,
             Actions.SETTLE_ALL,
             Actions.TAKE_ALL
         );
@@ -345,10 +345,10 @@ contract UnibuyOrderManager is
             _handleTakeOrderOutputSingle(params);
         } else if (action == Actions.TAKE_ORDER_OUTPUT) {
             _handleTakeOrderOutput(params);
-        } else if (action == Actions.PLACE_ORDER) {
-            _handlePlaceOrder(params);
-        } else if (action == Actions.PLACE_ORDER_WITH_TAKE) {
-            _handlePlaceOrderWithTake(params);
+        } else if (action == Actions.MAKE_ORDER) {
+            _handleMakeOrder(params);
+        } else if (action == Actions.MAKE_ORDER_WITH_TAKE) {
+            _handleMakeOrderWithTake(params);
         } else if (action == Actions.CLOSE_ORDER) {
             _handleClose(params);
         } else if (action == Actions.SETTLE) {
@@ -484,65 +484,65 @@ contract UnibuyOrderManager is
         if (currentAmount > takeParams.amountInMaximum) revert TooMuchRequested(takeParams.amountInMaximum, currentAmount);
     }
 
-    /// @dev Places a maker limit order from packed orderInfo.
+    /// @dev Makes a maker limit order from packed orderInfo.
     ///      Populates poolKeys on first use.
     ///      Delta is left for SETTLE_ALL.
     /// @param params abi.encode(UnibuyPoolKey poolKey, uint256 orderInfo, uint128 liquidity, address recipient)
-    function _handlePlaceOrder(bytes calldata params) internal {
-        CalldataDecoder.PlaceOrderParams calldata placeParams = params.decodePlaceMakerParams();
-        PackedOrderInfo orderInfo = PackedOrderInfo.wrap(placeParams.orderInfo);
+    function _handleMakeOrder(bytes calldata params) internal {
+        CalldataDecoder.MakeOrderParams calldata makeParams = params.decodeMakeOrderParams();
+        PackedOrderInfo orderInfo = PackedOrderInfo.wrap(makeParams.orderInfo);
 
-        _placeMakerInternal(
-            placeParams.poolKey,
+        _makeOrderInternal(
+            makeParams.poolKey,
             orderInfo,
-            placeParams.liquidity,
-            placeParams.owner
+            makeParams.liquidity,
+            makeParams.owner
         );
     }
 
-    /// @dev Places a maker order with optional mirror pre-take using the token0 budget.
-    function _handlePlaceOrderWithTake(bytes calldata params) internal {
-        CalldataDecoder.PlaceOrderWithTakeParams calldata placeParams = params.decodePlaceOrderWithTakeParams();
-        PackedOrderInfo orderInfo = PackedOrderInfo.wrap(placeParams.orderInfo);
+    /// @dev Makes a maker order with optional mirror pre-take using the token0 budget.
+    function _handleMakeOrderWithTake(bytes calldata params) internal {
+        CalldataDecoder.MakeOrderWithTakeParams calldata makeParams = params.decodeMakeOrderWithTakeParams();
+        PackedOrderInfo orderInfo = PackedOrderInfo.wrap(makeParams.orderInfo);
 
-        uint256 remainingAmount0 = placeParams.amount0;
-        int24 tickLowerForPlace = orderInfo.tickLower();
-        int24 tickUpperForPlace = orderInfo.tickUpper();
+        uint256 remainingAmount0 = makeParams.amount0;
+        int24 tickLowerForMake = orderInfo.tickLower();
+        int24 tickUpperForMake = orderInfo.tickUpper();
 
         // If tickLower implies a better immediate execution region, consume token0 in mirror first.
-        UnibuyPoolKey memory placeKey = placeParams.poolKey;
-        UnibuyPoolKey memory mirrorKey = placeKey.mirrorKey();
+        UnibuyPoolKey memory makeKey = makeParams.poolKey;
+        UnibuyPoolKey memory mirrorKey = makeKey.mirrorKey();
         (uint160 mirrorCurrentPrice,,,,,, ) = poolManager.getSlot0(mirrorKey.toId());
-        uint160 mirrorPriceLimit = TickMath.getSqrtPriceAtTick(-tickLowerForPlace);
+        uint160 mirrorPriceLimit = TickMath.getSqrtPriceAtTick(-tickLowerForMake);
 
         if (mirrorPriceLimit > mirrorCurrentPrice) {
             (, int128 delta1) =
                 // forge-lint: disable-next-line(unsafe-typecast)
-                poolManager.takeOrder(mirrorKey, -int256(placeParams.amount0), mirrorPriceLimit);
+                poolManager.takeOrder(mirrorKey, -int256(makeParams.amount0), mirrorPriceLimit);
 
             // mirror currency1 is original currency0, negative delta1 means currency0 spent.
             // forge-lint: disable-next-line(unsafe-typecast)
             uint256 spentAmount0 = uint256(uint128(-delta1));
-            remainingAmount0 = placeParams.amount0 - spentAmount0;
+            remainingAmount0 = makeParams.amount0 - spentAmount0;
 
             // When pre-take is executed, normalize tickLower to the pool tick spacing.
-            tickLowerForPlace = _alignTickUpToSpacing(tickLowerForPlace, placeKey.tickSpacing);
-            orderInfo = orderInfo.setTickLower(tickLowerForPlace);
+            tickLowerForMake = _alignTickUpToSpacing(tickLowerForMake, makeKey.tickSpacing);
+            orderInfo = orderInfo.setTickLower(tickLowerForMake);
         }
 
         if (remainingAmount0 == 0) return;
-        uint128 liquidity = _liquidityForAmount0(tickLowerForPlace, tickUpperForPlace, remainingAmount0);
+        uint128 liquidity = _liquidityForAmount0(tickLowerForMake, tickUpperForMake, remainingAmount0);
 
-        _placeMakerInternal(
-            placeKey,
+        _makeOrderInternal(
+            makeKey,
             orderInfo,
             liquidity,
-            placeParams.owner
+            makeParams.owner
         );
     }
 
-    /// @dev Shared maker placement implementation for action handlers.
-    function _placeMakerInternal(
+    /// @dev Shared maker makeOrder implementation for action handlers.
+    function _makeOrderInternal(
         UnibuyPoolKey memory poolKey,
         PackedOrderInfo orderInfo,
         uint128 liquidity,
@@ -554,7 +554,7 @@ contract UnibuyOrderManager is
         int24 tickUpper = orderInfo.tickUpper();
 
         uint256 tokenId = ++lastTokenId;
-        poolManager.placeOrder(poolKey, tickLower, tickUpper, liquidity, bytes32(tokenId));
+        poolManager.makeOrder(poolKey, tickLower, tickUpper, liquidity, bytes32(tokenId));
 
         // Mint the NFT to the recipient and record the order
         _mint(recipient, tokenId);
@@ -603,7 +603,7 @@ contract UnibuyOrderManager is
                     .setTickLowerMirror(tickLower)
                     .setTickUpperMirror(tickUpper);
 
-                _placeMakerInternal(orderPoolKey.mirrorKey(), mirrorOrderInfo, mirrorLiquidity, tokenOwner);
+                _makeOrderInternal(orderPoolKey.mirrorKey(), mirrorOrderInfo, mirrorLiquidity, tokenOwner);
             }
         }
 

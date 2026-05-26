@@ -157,7 +157,7 @@ abstract contract OrderManagerTestBase is Test {
             false
         );
         vm.prank(maker);
-        orderManager.placeOrderNoTake(poolKey, orderInfo, liquidity, block.timestamp + 1 hours);
+        orderManager.makeOrder(poolKey, orderInfo, liquidity, block.timestamp + 1 hours);
         compensation = 0;
     }
 
@@ -180,7 +180,7 @@ abstract contract OrderManagerTestBase is Test {
             false
         );
         vm.prank(maker);
-        orderManager.placeOrderNoTake(mirrorKey, orderInfo, liquidity, block.timestamp + 1 hours);
+        orderManager.makeOrder(mirrorKey, orderInfo, liquidity, block.timestamp + 1 hours);
         compensation = 0;
     }
 

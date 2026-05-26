@@ -55,7 +55,7 @@ contract MakerOrderTest is OrderManagerTestBase {
         uint256 orderInfo = _encodeOrderInfo(TL, TU, -TU, -TL, true, false);
         vm.prank(alice);
         vm.expectRevert(abi.encodeWithSelector(bytes4(keccak256("DeadlinePassed()"))));
-        orderManager.placeOrderNoTake(poolKey, orderInfo, LIQ, block.timestamp - 1);
+        orderManager.makeOrder(poolKey, orderInfo, LIQ, block.timestamp - 1);
     }
 
     // Multiple sell orders from different makers
@@ -104,22 +104,22 @@ contract MakerOrderTest is OrderManagerTestBase {
         uint256 orderInfo = _encodeOrderInfo(TL, TU, -TU, -TL, true, false);
         vm.prank(alice);
         vm.expectRevert(abi.encodeWithSelector(bytes4(keccak256("DeadlinePassed()"))));
-        orderManager.placeOrderNoTake(mirrorKey, orderInfo, LIQ, block.timestamp - 1);
+        orderManager.makeOrder(mirrorKey, orderInfo, LIQ, block.timestamp - 1);
     }
 
-    function test_placeOrderWithTake_mintsNftAndDepositsToken0() public {
+    function test_makeOrderWithTake_mintsNftAndDepositsToken0() public {
         uint256 beforeA = tokenA.balanceOf(alice);
         uint256 beforeId = orderManager.lastTokenId() + 1;
         uint256 orderInfo = _encodeOrderInfo(TL, TU, -TU, -TL, true, false);
 
         vm.prank(alice);
-        orderManager.placeOrderWithTake(poolKey, orderInfo, 1e18, block.timestamp + 1 hours);
+        orderManager.makeOrderWithTake(poolKey, orderInfo, 1e18, block.timestamp + 1 hours);
 
         assertEq(orderManager.ownerOf(beforeId), alice, "alice should own nft");
         assertLt(tokenA.balanceOf(alice), beforeA, "token0 should be spent");
     }
 
-    function test_placeOrderWithTake_executesMirrorTakeWhenNeeded() public {
+    function test_makeOrderWithTake_executesMirrorTakeWhenNeeded() public {
         // Seed mirror-side liquidity in [60, 120] so mirror take from 0 -> 120 has active segment.
         _placeBuyOrder(bob, -120, -60, LIQ);
 
@@ -131,18 +131,18 @@ contract MakerOrderTest is OrderManagerTestBase {
         uint256 beforeB = tokenB.balanceOf(alice);
 
         vm.prank(alice);
-        orderManager.placeOrderWithTake(poolKey, orderInfo, 2e18, block.timestamp + 1 hours);
+        orderManager.makeOrderWithTake(poolKey, orderInfo, 2e18, block.timestamp + 1 hours);
 
         assertGt(tokenB.balanceOf(alice), beforeB, "mirror pre-take should credit token1");
     }
 
-    function test_placeOrderWithTake_zeroAmount_doesNotMint() public {
+    function test_makeOrderWithTake_zeroAmount_doesNotMint() public {
         uint256 beforeId = orderManager.lastTokenId();
         uint256 beforeA = tokenA.balanceOf(alice);
         uint256 orderInfo = _encodeOrderInfo(TL, TU, -TU, -TL, true, false);
 
         vm.prank(alice);
-        orderManager.placeOrderWithTake(poolKey, orderInfo, 0, block.timestamp + 1 hours);
+        orderManager.makeOrderWithTake(poolKey, orderInfo, 0, block.timestamp + 1 hours);
 
         assertEq(orderManager.lastTokenId(), beforeId, "zero amount should not mint a new NFT");
         assertEq(tokenA.balanceOf(alice), beforeA, "zero amount should not spend token0");

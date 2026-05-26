@@ -9,20 +9,19 @@ import {ImmutableState} from "./ImmutableState.sol";
 
 /// @title DeltaResolver
 /// @notice Abstract contract used to sync, send, and settle funds to the Unibuy pool manager.
-///         Mirrors the v4-periphery DeltaResolver pattern adapted for UnibuyPoolManager
-///         (which uses `pull` instead of `take`).
+///         Mirrors the v4-periphery DeltaResolver pattern adapted for UnibuyPoolManager.
 abstract contract DeltaResolver is ImmutableState {
     using CurrencyLibrary for Currency;
     using TransientStateLibrary for IUnibuyPoolManager;
 
-    /// @notice Pull an amount of currency out of the PoolManager to a recipient
-    /// @param currency Currency to pull
+    /// @notice Take an amount of currency out of the PoolManager to a recipient
+    /// @param currency Currency to take
     /// @param recipient Address to receive the currency
-    /// @param amount Amount to pull
+    /// @param amount Amount to take
     /// @dev Returns early if the amount is 0
     function _take(Currency currency, address recipient, uint256 amount) internal {
         if (amount == 0) return;
-        poolManager.pull(currency, recipient, amount);
+        poolManager.take(currency, recipient, amount);
     }
 
     /// @notice Pay and settle a currency to the PoolManager

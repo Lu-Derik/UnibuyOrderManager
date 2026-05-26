@@ -349,7 +349,7 @@ contract TakerOrderTest is OrderManagerTestBase {
         tokenC.approve(address(orderManager), type(uint256).max);
         uint256 orderInfo = _encodeOrderInfo(TL, TU, -TU, -TL, true, false);
         vm.prank(alice);
-        orderManager.placeOrderNoTake(zPool, orderInfo, LIQ, block.timestamp + 1 hours);
+        orderManager.makeOrder(zPool, orderInfo, LIQ, block.timestamp + 1 hours);
 
         currencyIn = Currency.wrap(address(tokenB));
         currencyOut = Currency.wrap(address(tokenC));

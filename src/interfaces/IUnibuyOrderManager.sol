@@ -39,34 +39,6 @@ interface IUnibuyOrderManager {
     }
 
     // ─────────────────────────────────────────────────────────────────────────
-    // Events
-    // ─────────────────────────────────────────────────────────────────────────
-
-    event TakerOrderExecuted(
-        address indexed user,
-        bytes32 indexed poolId,
-        uint256 amountIn,
-        uint256 amountOut,
-        uint256 fee
-    );
-
-    event MakerOrderPlaced(
-        address indexed maker,
-        bytes32 indexed poolId,
-        uint256 indexed tokenId,
-        int24 tickLower,
-        int24 tickUpper,
-        uint96 compensation
-    );
-
-    event MakerOrderClosed(
-        address indexed owner,
-        uint256 indexed tokenId,
-        uint256 token0Amount,
-        uint256 token1Amount
-    );
-
-    // ─────────────────────────────────────────────────────────────────────────
     // Errors
     // ─────────────────────────────────────────────────────────────────────────
 
@@ -157,29 +129,29 @@ interface IUnibuyOrderManager {
     // Maker order
     // ─────────────────────────────────────────────────────────────────────────
 
-    /// @notice Place a maker (limit) order on the provided pool key. Mints an ERC-721 NFT.
+    /// @notice Make a maker (limit) order on the provided pool key. Mints an ERC-721 NFT.
     ///
-    /// @param key        Resolved pool key to place into (forward or mirror).
+    /// @param key        Resolved pool key to make into (forward or mirror).
     /// @param orderInfo  Packed order metadata in OrderInfoLibrary layout (poolId ignored on input).
     ///                   Encodes tickLower/tickUpper/tickLowerMirror/tickUpperMirror/chained/auto.
     /// @param liquidity  Virtual liquidity to provide.
     /// @param deadline   Expiry timestamp.
     ///
-    function placeOrderNoTake(
+    function makeOrder(
         UnibuyPoolKey calldata key,
         uint256 orderInfo,
         uint128 liquidity,
         uint256 deadline
     ) external payable;
 
-    /// @notice Place maker order using a token0 budget; optionally consumes part of it via mirror take first.
+    /// @notice Make maker order using a token0 budget; optionally consumes part of it via mirror take first.
     ///
-    /// @param key        Resolved pool key to place into.
+    /// @param key        Resolved pool key to make into.
     /// @param orderInfo  Packed order metadata in OrderInfoLibrary layout (poolId ignored on input).
     ///                   Encodes tickLower/tickUpper/tickLowerMirror/tickUpperMirror/chained/auto.
     /// @param amount0    Total token0 budget provided by user.
     /// @param deadline   Expiry timestamp.
-    function placeOrderWithTake(
+    function makeOrderWithTake(
         UnibuyPoolKey calldata key,
         uint256 orderInfo,
         uint256 amount0,

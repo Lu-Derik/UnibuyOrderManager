@@ -3,7 +3,6 @@ pragma solidity ^0.8.26;
 
 import {OrderManagerTestBase}  from "./helpers/OrderManagerTestBase.t.sol";
 import {UnibuyStateViewQuoter} from "../src/UnibuyStateViewQuoter.sol";
-import {OrderInspectionView}   from "../src/OrderInspectionView.sol";
 import {UnibuyPoolManager}     from "@unibuy/UnibuyPoolManager.sol";
 import {IUnibuyPoolManager}    from "@unibuy/interfaces/IUnibuyPoolManager.sol";
 import {IProtocolFees}         from "@unibuy/interfaces/IProtocolFees.sol";
@@ -34,7 +33,6 @@ contract StateViewQuoterTest is OrderManagerTestBase {
     // ─────────────────────────────────────────────────────────────────────────
 
     UnibuyStateViewQuoter internal quoter;
-    OrderInspectionView   internal inspector;
 
     /// @dev Third token + pools for multi-hop tests (tokenB ↔ tokenC).
     TestERC20      internal tokenC;
@@ -48,8 +46,7 @@ contract StateViewQuoterTest is OrderManagerTestBase {
     function setUp() public override {
         super.setUp();
 
-        quoter    = new UnibuyStateViewQuoter(address(poolManager));
-        inspector = new OrderInspectionView(address(poolManager), address(orderManager));
+        quoter = new UnibuyStateViewQuoter(address(poolManager), address(orderManager));
 
         // ── second pair (tokenB / tokenC) for multi-hop ──────────────────────
         tokenC = new TestERC20("Token C", "TKC", 18);
@@ -603,12 +600,12 @@ contract StateViewQuoterTest is OrderManagerTestBase {
     }
 
     // ─────────────────────────────────────────────────────────────────────────
-    // § 8  OrderInspectionView — constructor
+    // § 8  Inspection API — constructor
     // ─────────────────────────────────────────────────────────────────────────
 
-    function test_inspector_immutables() public view {
-        assertEq(address(inspector.poolManager()),  address(poolManager));
-        assertEq(address(inspector.orderManager()), address(orderManager));
+    function test_quoter_immutables() public view {
+        assertEq(address(quoter.poolManager()),  address(poolManager));
+        assertEq(address(quoter.orderManager()), address(orderManager));
     }
 
     // ─────────────────────────────────────────────────────────────────────────
@@ -619,8 +616,8 @@ contract StateViewQuoterTest is OrderManagerTestBase {
     function test_getOrderCrossedStatus_notCrossed() public {
         (uint256 tokenId,) = _placeSellOrder(alice, TL, TU, LIQ);
 
-        OrderInspectionView.OrderCrossedStatus memory status =
-            inspector.getOrderCrossedStatus(tokenId);
+        UnibuyStateViewQuoter.OrderCrossedStatus memory status =
+            quoter.getOrderCrossedStatus(tokenId);
 
         assertFalse(status.fullyCrossed, "should not be crossed");
         assertEq(status.daysElapsed, 0,  "placed today: 0 days elapsed");
@@ -641,8 +638,8 @@ contract StateViewQuoterTest is OrderManagerTestBase {
         (, int24 tick,) = _getSlot0Fwd();
         vm.assume(tick >= TU); // guard: skip if pool did not move enough
 
-        OrderInspectionView.OrderCrossedStatus memory status =
-            inspector.getOrderCrossedStatus(tokenId);
+        UnibuyStateViewQuoter.OrderCrossedStatus memory status =
+            quoter.getOrderCrossedStatus(tokenId);
 
         assertTrue(status.fullyCrossed, "should be fully crossed after taker buy");
     }
@@ -651,8 +648,8 @@ contract StateViewQuoterTest is OrderManagerTestBase {
     function test_getOrderCrossedStatus_daysElapsed_zeroForFreshOrder() public {
         (uint256 tokenId,) = _placeSellOrder(alice, TL, TU, LIQ);
 
-        OrderInspectionView.OrderCrossedStatus memory status =
-            inspector.getOrderCrossedStatus(tokenId);
+        UnibuyStateViewQuoter.OrderCrossedStatus memory status =
+            quoter.getOrderCrossedStatus(tokenId);
 
         // A freshly-placed order always has daysElapsed = 0 (placed in today's session).
         assertEq(status.daysElapsed, 0, "fresh order: daysElapsed should be 0");
@@ -667,8 +664,8 @@ contract StateViewQuoterTest is OrderManagerTestBase {
     function test_getOrderToken0AndCompensation_unfilled() public {
         (uint256 tokenId,) = _placeSellOrder(alice, TL, TU, LIQ);
 
-        OrderInspectionView.OrderAmounts memory amounts =
-            inspector.getOrderToken0AndCompensation(tokenId);
+        UnibuyStateViewQuoter.OrderAmounts memory amounts =
+            quoter.getOrderToken0AndCompensation(tokenId);
 
         // Pool is at tick 0 which is below TL=60, so full range should be available.
         assertGt(amounts.amount0Remaining, 0, "some token0 must remain");
@@ -685,8 +682,8 @@ contract StateViewQuoterTest is OrderManagerTestBase {
         (, int24 tick,) = _getSlot0Fwd();
         vm.assume(tick >= TU);
 
-        OrderInspectionView.OrderAmounts memory amounts =
-            inspector.getOrderToken0AndCompensation(tokenId);
+        UnibuyStateViewQuoter.OrderAmounts memory amounts =
+            quoter.getOrderToken0AndCompensation(tokenId);
 
         assertEq(amounts.amount0Remaining, 0, "fully crossed: no token0 left");
     }
@@ -699,8 +696,8 @@ contract StateViewQuoterTest is OrderManagerTestBase {
     function test_simulateCloseOrder_uncrossed() public {
         (uint256 tokenId,) = _placeSellOrder(alice, TL, TU, LIQ);
 
-        OrderInspectionView.SimulatedClose memory sim =
-            inspector.simulateCloseOrder(tokenId);
+        UnibuyStateViewQuoter.SimulatedClose memory sim =
+            quoter.simulateCloseOrder(tokenId);
 
         assertGt(sim.delta0, 0,  "should recover token0");
         assertEq(sim.delta1, 0,  "no token1 earned yet");
@@ -715,8 +712,8 @@ contract StateViewQuoterTest is OrderManagerTestBase {
         (, int24 tick,) = _getSlot0Fwd();
         vm.assume(tick >= TU);
 
-        OrderInspectionView.SimulatedClose memory sim =
-            inspector.simulateCloseOrder(tokenId);
+        UnibuyStateViewQuoter.SimulatedClose memory sim =
+            quoter.simulateCloseOrder(tokenId);
 
         assertEq(sim.delta0, 0,  "fully crossed: no token0");
         assertGe(sim.delta1, 0,  "should have earned token1");
@@ -730,8 +727,8 @@ contract StateViewQuoterTest is OrderManagerTestBase {
     function test_getFullOrderInfo_basic() public {
         (uint256 tokenId,) = _placeSellOrder(alice, TL, TU, LIQ);
 
-        OrderInspectionView.FullOrderInfo memory info =
-            inspector.getFullOrderInfo(tokenId);
+        UnibuyStateViewQuoter.FullOrderInfo memory info =
+            quoter.getFullOrderInfo(tokenId);
 
         assertEq(info.owner,      alice,  "owner should be alice");
         assertEq(info.tickLower,  TL,     "tickLower mismatch");
@@ -754,8 +751,8 @@ contract StateViewQuoterTest is OrderManagerTestBase {
         (, int24 tick,) = _getSlot0Fwd();
         vm.assume(tick >= TU);
 
-        OrderInspectionView.FullOrderInfo memory info =
-            inspector.getFullOrderInfo(tokenId);
+        UnibuyStateViewQuoter.FullOrderInfo memory info =
+            quoter.getFullOrderInfo(tokenId);
 
         assertTrue(info.fullyCrossed, "FullOrderInfo.fullyCrossed should be true");
     }

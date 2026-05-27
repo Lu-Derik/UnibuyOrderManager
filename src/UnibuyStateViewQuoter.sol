@@ -9,6 +9,24 @@ import {OrderInfo}            from "@unibuy/types/UnibuyTypes.sol";
 import {StateLibrary}         from "@unibuy/libraries/StateLibrary.sol";
 import {TransientStateLibrary} from "@unibuy/libraries/TransientStateLibrary.sol";
 import {TickMath}             from "@unibuy/libraries/TickMath.sol";
+import {SqrtPriceMath}        from "@unibuy/libraries/SqrtPriceMath.sol";
+import {FullMath}             from "@unibuy/libraries/FullMath.sol";
+
+/// @dev Minimal view interface for public ERC-721 and mapping fields on UnibuyOrderManager.
+interface IOrderManagerExtra {
+    struct MakerOrderInfo {
+        bytes19 poolId;
+        int24   tickLower;
+        int24   tickUpper;
+        int24   tickLowerMirror;
+        int24   tickUpperMirror;
+        bool    chained;
+        bool    autoClose;
+    }
+    function ownerOf(uint256 tokenId) external view returns (address);
+    function getMakerOrder(uint256 tokenId) external view returns (MakerOrderInfo memory);
+    function poolKeys(bytes19 poolId) external view returns (UnibuyPoolKey memory);
+}
 
 /// @title UnibuyStateViewQuoter
 /// @notice Single contract combining typed pool-state reads (StateView) and
@@ -47,6 +65,7 @@ contract UnibuyStateViewQuoter is IUnlockCallback {
     // ─────────────────────────────────────────────────────────────────────────
 
     IUnibuyPoolManager public immutable poolManager;
+    IOrderManagerExtra public immutable orderManager;
 
     // ─────────────────────────────────────────────────────────────────────────
     // Structs
@@ -97,6 +116,63 @@ contract UnibuyStateViewQuoter is IUnlockCallback {
         uint32[8]  slot1Heights;
     }
 
+    /// @notice Status of a maker order relative to current pool price and day history.
+    struct OrderCrossedStatus {
+        bool   fullyCrossed;    // true if current tick >= tickUpper (all token0 sold)
+        uint8  daysElapsed;     // day-boundaries crossed since placement (0=today, 7=>=7 days)
+        bool   sevenDaysPassed; // true when the order was placed >=7 days ago
+    }
+
+    /// @notice Remaining token0 and pending compensation for an open maker order.
+    struct OrderAmounts {
+        uint256 amount0Remaining; // unsold token0 (from current sqrtPrice up to tickUpper)
+        uint96  compensation;     // amountDeduction owed by this order to earlier makers
+    }
+
+    /// @notice Simulated settlement deltas if a maker order were closed now.
+    struct SimulatedClose {
+        int128 delta0; // token0 returned to maker (0 if fully crossed)
+        int128 delta1; // net token1 after compensation deduction (negative if deduction > earned)
+    }
+
+    /// @notice Comprehensive view of a maker NFT order combining NFT, router, and pool state.
+    struct FullOrderInfo {
+        address       owner;
+        bytes19       poolId;
+        UnibuyPoolKey poolKey;
+        int24         tickLower;
+        int24         tickUpper;
+        int24         tickLowerMirror;
+        int24         tickUpperMirror;
+        bool          chained;
+        bool          autoClose;
+        uint128       liquidity;
+        uint32        orderHeight;
+        uint96        amountDeduction;
+        bool          fullyCrossed;
+        uint8         daysElapsed;
+    }
+
+    /// @dev Shared loaded order data for inspection helpers.
+    struct LoadedOrderData {
+        address       owner;
+        bytes19       poolId;
+        UnibuyPoolKey poolKey;
+        int24         tickLower;
+        int24         tickUpper;
+        int24         tickLowerMirror;
+        int24         tickUpperMirror;
+        bool          chained;
+        bool          autoClose;
+        uint128       liquidity;
+        uint32        orderHeight;
+        uint96        amountDeduction;
+        uint160       sqrtPriceX96;
+        int24         currentTick;
+        uint32        currentPoolHeight;
+        uint32[8]     heights;
+    }
+
     // ─────────────────────────────────────────────────────────────────────────
     // Errors
     // ─────────────────────────────────────────────────────────────────────────
@@ -129,8 +205,9 @@ contract UnibuyStateViewQuoter is IUnlockCallback {
     // Constructor
     // ─────────────────────────────────────────────────────────────────────────
 
-    constructor(address _poolManager) {
-        poolManager = IUnibuyPoolManager(_poolManager);
+    constructor(address _poolManager, address _orderManager) {
+        poolManager  = IUnibuyPoolManager(_poolManager);
+        orderManager = IOrderManagerExtra(_orderManager);
     }
 
     // ─────────────────────────────────────────────────────────────────────────
@@ -466,6 +543,215 @@ contract UnibuyStateViewQuoter is IUnlockCallback {
         (uint160 sqrtAfter, int24 tickAfter, uint32 heightAfter,,,,) =
             poolManager.getSlot0(firstExecutedHopKey.toId());
         revert QuoteRevert(currentRequiredIn, amountOut, totalProtocolFee, sqrtAfter, tickAfter, heightAfter);
+    }
+
+    // ─────────────────────────────────────────────────────────────────────────
+    // Order inspection — view functions
+    // ─────────────────────────────────────────────────────────────────────────
+
+    function getOrderCrossedStatus(uint256 tokenId)
+        external view returns (OrderCrossedStatus memory status)
+    {
+        LoadedOrderData memory o = this.loadOrderInspectionData(tokenId);
+        status.fullyCrossed = o.currentTick >= o.tickUpper;
+
+        status.daysElapsed = 7;
+        for (uint8 i = 0; i < 8; i++) {
+            if (o.heights[i] == 0) {
+                status.daysElapsed = i;
+                break;
+            }
+            if (o.orderHeight >= o.heights[i]) {
+                status.daysElapsed = i;
+                break;
+            }
+        }
+        status.sevenDaysPassed = o.heights[7] > 0 && o.orderHeight < o.heights[7];
+    }
+
+    function getOrderToken0AndCompensation(uint256 tokenId)
+        external view returns (OrderAmounts memory amounts)
+    {
+        LoadedOrderData memory o = this.loadOrderInspectionData(tokenId);
+        amounts.compensation = o.amountDeduction;
+
+        if (o.liquidity == 0) return amounts;
+
+        uint160 sqrtLower = TickMath.getSqrtPriceAtTick(o.tickLower);
+        uint160 sqrtUpper = TickMath.getSqrtPriceAtTick(o.tickUpper);
+
+        if (o.currentTick >= o.tickUpper) {
+            amounts.amount0Remaining = 0;
+        } else if (o.sqrtPriceX96 <= sqrtLower) {
+            amounts.amount0Remaining =
+                SqrtPriceMath.getAmount0Delta(sqrtLower, sqrtUpper, o.liquidity, false);
+        } else {
+            amounts.amount0Remaining =
+                SqrtPriceMath.getAmount0Delta(o.sqrtPriceX96, sqrtUpper, o.liquidity, false);
+        }
+    }
+
+    function simulateCloseOrder(uint256 tokenId)
+        external view returns (SimulatedClose memory result)
+    {
+        LoadedOrderData memory o = this.loadOrderInspectionData(tokenId);
+        if (o.liquidity == 0) return result;
+
+        (uint256 t0, uint256 t1) = _computeSettlement(
+            o.poolKey.toId(), o.tickLower, o.tickUpper, o.liquidity, o.orderHeight
+        );
+
+        uint96 deduction = o.amountDeduction;
+        if (t1 >= uint256(deduction)) {
+            result.delta1 = int128(int256(t1 - uint256(deduction)));
+        } else {
+            result.delta1 = -int128(int256(uint256(deduction) - t1));
+        }
+        result.delta0 = int128(int256(t0));
+    }
+
+    function getFullOrderInfo(uint256 tokenId)
+        external view returns (FullOrderInfo memory info)
+    {
+        LoadedOrderData memory o = this.loadOrderInspectionData(tokenId);
+
+        info.owner           = o.owner;
+        info.poolId          = o.poolId;
+        info.poolKey         = o.poolKey;
+        info.tickLower       = o.tickLower;
+        info.tickUpper       = o.tickUpper;
+        info.tickLowerMirror = o.tickLowerMirror;
+        info.tickUpperMirror = o.tickUpperMirror;
+        info.chained         = o.chained;
+        info.autoClose       = o.autoClose;
+        info.liquidity       = o.liquidity;
+        info.orderHeight     = o.orderHeight;
+        info.amountDeduction = o.amountDeduction;
+        info.fullyCrossed    = o.currentTick >= o.tickUpper;
+
+        info.daysElapsed = 7;
+        for (uint8 i = 0; i < 8; i++) {
+            if (o.heights[i] == 0) {
+                info.daysElapsed = i;
+                break;
+            }
+            if (o.orderHeight >= o.heights[i]) {
+                info.daysElapsed = i;
+                break;
+            }
+        }
+    }
+
+    /// @notice Shared loader for inspection views.
+    /// @dev Kept as a single entrypoint to avoid optimizer issues with repeated call patterns.
+    function loadOrderInspectionData(uint256 tokenId)
+        external view returns (LoadedOrderData memory o)
+    {
+        o.owner = orderManager.ownerOf(tokenId);
+
+        IOrderManagerExtra.MakerOrderInfo memory meta = orderManager.getMakerOrder(tokenId);
+        o.poolId          = meta.poolId;
+        o.tickLower       = meta.tickLower;
+        o.tickUpper       = meta.tickUpper;
+        o.tickLowerMirror = meta.tickLowerMirror;
+        o.tickUpperMirror = meta.tickUpperMirror;
+        o.chained         = meta.chained;
+        o.autoClose       = meta.autoClose;
+
+        UnibuyPoolKey memory key = orderManager.poolKeys(meta.poolId);
+        o.poolKey = key;
+        UnibuyPoolId id = key.toId();
+
+        OrderInfo memory poolOrderInfo =
+            poolManager.getOrderInfo(id, address(orderManager), meta.tickLower, meta.tickUpper, bytes32(tokenId));
+        o.liquidity       = poolOrderInfo.liquidity;
+        o.orderHeight     = poolOrderInfo.orderHeight;
+        o.amountDeduction = poolOrderInfo.amountDeduction;
+
+        (o.sqrtPriceX96, o.currentTick, o.currentPoolHeight,,,,) = poolManager.getSlot0(id);
+        o.heights = poolManager.getSlot1Heights(id);
+    }
+
+    // ─────────────────────────────────────────────────────────────────────────
+    // Settlement helpers
+    // ─────────────────────────────────────────────────────────────────────────
+
+    function _computeSettlement(
+        UnibuyPoolId id,
+        int24   tickLower,
+        int24   tickUpper,
+        uint128 liquidity,
+        uint32  orderHeight
+    ) private view returns (uint256 token0, uint256 token1) {
+        (uint160 sqrtPriceX96, int24 currentTick, uint32 currentPoolHeight,,,, ) =
+            poolManager.getSlot0(id);
+        uint160 sqrtLower = TickMath.getSqrtPriceAtTick(tickLower);
+        uint160 sqrtUpper = TickMath.getSqrtPriceAtTick(tickUpper);
+
+        if (currentTick >= tickUpper) {
+            (bool found, uint256 t1) =
+                _readClearanceSettlement(id, tickUpper, liquidity, orderHeight, currentPoolHeight);
+            if (found) token1 = t1;
+        } else if (sqrtPriceX96 <= sqrtLower) {
+            token0 = SqrtPriceMath.getAmount0Delta(sqrtLower, sqrtUpper, liquidity, false);
+        } else {
+            token0 = SqrtPriceMath.getAmount0Delta(sqrtPriceX96, sqrtUpper, liquidity, false);
+            (uint128 liqGross,,uint96 amtReceived,,,, ) = poolManager.getTickInfo(id, tickLower);
+            if (liqGross > 0 && amtReceived > 0) {
+                token1 = FullMath.mulDiv(liquidity, amtReceived, liqGross);
+            }
+        }
+    }
+
+    function _clearanceListSlots(UnibuyPoolId id, int24 tick)
+        private pure
+        returns (bytes32 lengthSlot, bytes32 dataStart)
+    {
+        bytes32 stateSlot        = keccak256(abi.encode(UnibuyPoolId.unwrap(id), StateLibrary.POOLS_SLOT));
+        bytes32 ticksMappingSlot = bytes32(uint256(stateSlot) + StateLibrary.TICKS_OFFSET);
+        bytes32 tickBase         = keccak256(abi.encode(int256(tick), ticksMappingSlot));
+        lengthSlot               = bytes32(uint256(tickBase) + 2);
+        dataStart                = keccak256(abi.encode(lengthSlot));
+    }
+
+    function _resolvedCrossHeight(uint24 ch24, uint32 currentPoolHeight)
+        private pure returns (uint32 h)
+    {
+        h = (currentPoolHeight & 0xFF000000) | uint32(ch24);
+        if (h > currentPoolHeight) h -= 0x01000000;
+    }
+
+    function _readClearanceSettlement(
+        UnibuyPoolId id,
+        int24        tick,
+        uint128      orderLiquidity,
+        uint32       orderHeight,
+        uint32       currentPoolHeight
+    ) private view returns (bool found, uint256 token1Out) {
+        (bytes32 lengthSlot, bytes32 dataStart) = _clearanceListSlots(id, tick);
+
+        uint256 listLength = uint256(poolManager.extsload(lengthSlot));
+        if (listLength == 0) return (false, 0);
+
+        uint256 lo = 0;
+        uint256 hi = listLength;
+        while (lo < hi) {
+            uint256 mid = lo + (hi - lo) / 2;
+            bytes32 midPacked = poolManager.extsload(bytes32(uint256(dataStart) + mid));
+            uint24 ch24 = uint24(uint256(midPacked) & 0xFFFFFF);
+            uint32 h = _resolvedCrossHeight(ch24, currentPoolHeight);
+            if (h < orderHeight) { lo = mid + 1; } else { hi = mid; }
+        }
+        if (lo >= listLength) return (false, 0);
+
+        bytes32 packed = poolManager.extsload(bytes32(uint256(dataStart) + lo));
+        uint128 liquiditySold = uint128(uint256(packed) >> 128);
+        uint96 amountReceived = uint96((uint256(packed) >> 32) & type(uint96).max);
+
+        if (liquiditySold == 0) return (false, 0);
+
+        token1Out = FullMath.mulDiv(orderLiquidity, amountReceived, liquiditySold);
+        found = true;
     }
 
 

@@ -758,6 +758,195 @@ contract StateViewQuoterTest is OrderManagerTestBase {
     }
 
     // ─────────────────────────────────────────────────────────────────────────
+    // § 13  Additional merged-API coverage
+    // ─────────────────────────────────────────────────────────────────────────
+
+    /// @dev Shared loader should stay consistent with getFullOrderInfo for the same tokenId.
+    function test_loadOrderInspectionData_matchesFullOrderInfo() public {
+        (uint256 tokenId,) = _placeSellOrder(alice, TL, TU, LIQ);
+
+        UnibuyStateViewQuoter.LoadedOrderData memory loaded =
+            quoter.loadOrderInspectionData(tokenId);
+        UnibuyStateViewQuoter.FullOrderInfo memory info =
+            quoter.getFullOrderInfo(tokenId);
+
+        assertEq(loaded.owner, info.owner, "owner mismatch");
+        assertEq(loaded.poolId, info.poolId, "poolId mismatch");
+        assertEq(Currency.unwrap(loaded.poolKey.currency0), Currency.unwrap(info.poolKey.currency0), "currency0 mismatch");
+        assertEq(Currency.unwrap(loaded.poolKey.currency1), Currency.unwrap(info.poolKey.currency1), "currency1 mismatch");
+        assertEq(loaded.poolKey.tickSpacing, info.poolKey.tickSpacing, "tickSpacing mismatch");
+        assertEq(loaded.tickLower, info.tickLower, "tickLower mismatch");
+        assertEq(loaded.tickUpper, info.tickUpper, "tickUpper mismatch");
+        assertEq(loaded.tickLowerMirror, info.tickLowerMirror, "tickLowerMirror mismatch");
+        assertEq(loaded.tickUpperMirror, info.tickUpperMirror, "tickUpperMirror mismatch");
+        assertEq(loaded.chained, info.chained, "chained mismatch");
+        assertEq(loaded.autoClose, info.autoClose, "autoClose mismatch");
+        assertEq(loaded.liquidity, info.liquidity, "liquidity mismatch");
+        assertEq(loaded.orderHeight, info.orderHeight, "orderHeight mismatch");
+        assertEq(loaded.amountDeduction, info.amountDeduction, "deduction mismatch");
+    }
+
+    /// @dev Transfer of maker NFT should be reflected by getFullOrderInfo.owner.
+    function test_getFullOrderInfo_ownerReflectsTransfer() public {
+        (uint256 tokenId,) = _placeSellOrder(alice, TL, TU, LIQ);
+
+        vm.prank(alice);
+        orderManager.transferFrom(alice, bob, tokenId);
+
+        UnibuyStateViewQuoter.FullOrderInfo memory info = quoter.getFullOrderInfo(tokenId);
+        assertEq(info.owner, bob, "owner should update after transfer");
+    }
+
+    /// @dev getOrderCrossedStatus and getFullOrderInfo should agree on crossed flag and day bucket.
+    function test_statusAndFullInfo_consistent() public {
+        (uint256 tokenId,) = _placeSellOrder(alice, TL, TU, LIQ);
+
+        UnibuyStateViewQuoter.OrderCrossedStatus memory status = quoter.getOrderCrossedStatus(tokenId);
+        UnibuyStateViewQuoter.FullOrderInfo memory info = quoter.getFullOrderInfo(tokenId);
+
+        assertEq(status.fullyCrossed, info.fullyCrossed, "crossed flag mismatch");
+        assertEq(status.daysElapsed, info.daysElapsed, "daysElapsed mismatch");
+    }
+
+    /// @dev For uncrossed orders, amount0Remaining should equal simulated token0 close delta.
+    function test_amountsAndSimulate_consistent_uncrossed() public {
+        (uint256 tokenId,) = _placeSellOrder(alice, TL, TU, LIQ);
+
+        UnibuyStateViewQuoter.OrderAmounts memory amounts =
+            quoter.getOrderToken0AndCompensation(tokenId);
+        UnibuyStateViewQuoter.SimulatedClose memory sim =
+            quoter.simulateCloseOrder(tokenId);
+
+        assertEq(uint256(int256(sim.delta0)), amounts.amount0Remaining, "delta0 should match amount0Remaining");
+    }
+
+    /// @dev For fully-crossed orders, both amount0Remaining and simulated delta0 should be zero.
+    function test_amountsAndSimulate_consistent_fullyCrossed() public {
+        (uint256 tokenId,) = _placeSellOrder(alice, TL, TU, LIQ);
+        _takerBuy(dave, 100_000 ether, TickMath.getSqrtPriceAtTick(TU + TICK_SPACING));
+
+        (, int24 tick,) = _getSlot0Fwd();
+        vm.assume(tick >= TU);
+
+        UnibuyStateViewQuoter.OrderAmounts memory amounts =
+            quoter.getOrderToken0AndCompensation(tokenId);
+        UnibuyStateViewQuoter.SimulatedClose memory sim =
+            quoter.simulateCloseOrder(tokenId);
+
+        assertEq(amounts.amount0Remaining, 0, "amount0Remaining should be zero when crossed");
+        assertEq(sim.delta0, 0, "delta0 should be zero when crossed");
+    }
+
+    /// @dev One-hop exact-input path quote should match single-pool exact-input quote.
+    function test_quoteTakeOrderExactInput_oneHopPathMatchesSingle() public {
+        _placeSellOrder(alice, TL, TU, LIQ);
+
+        uint256 amountIn = 1e15;
+        uint160 limit = TickMath.MAX_SQRT_PRICE;
+
+        UnibuyStateViewQuoter.QuoteResult memory single =
+            quoter.quoteTakeOrderExactInputSingle(poolKey, amountIn, limit);
+
+        UnibuyStateViewQuoter.QuotePathKey[] memory path =
+            new UnibuyStateViewQuoter.QuotePathKey[](1);
+        path[0] = UnibuyStateViewQuoter.QuotePathKey({
+            hopCurrency: poolKey.currency0,
+            tickSpacing: TICK_SPACING
+        });
+
+        UnibuyStateViewQuoter.QuoteResult memory multi =
+            quoter.quoteTakeOrderExactInput(poolKey.currency1, path, amountIn);
+
+        assertEq(multi.amountIn, single.amountIn, "amountIn mismatch");
+        assertEq(multi.amountOut, single.amountOut, "amountOut mismatch");
+        assertEq(multi.protocolFee, single.protocolFee, "protocolFee mismatch");
+        assertEq(multi.sqrtPriceX96After, single.sqrtPriceX96After, "sqrtPrice mismatch");
+        assertEq(multi.tickAfter, single.tickAfter, "tick mismatch");
+        assertEq(multi.poolHeightAfter, single.poolHeightAfter, "height mismatch");
+    }
+
+    /// @dev One-hop exact-output path quote should match single-pool exact-output quote.
+    function test_quoteTakeOrderExactOutput_oneHopPathMatchesSingle() public {
+        _placeSellOrder(alice, TL, TU, LIQ);
+
+        uint256 amountOut = 5e14;
+        uint160 limit = TickMath.MAX_SQRT_PRICE;
+
+        UnibuyStateViewQuoter.QuoteResult memory single =
+            quoter.quoteTakeOrderExactOutputSingle(poolKey, amountOut, limit);
+
+        UnibuyStateViewQuoter.QuotePathKey[] memory path =
+            new UnibuyStateViewQuoter.QuotePathKey[](1);
+        path[0] = UnibuyStateViewQuoter.QuotePathKey({
+            hopCurrency: poolKey.currency1,
+            tickSpacing: TICK_SPACING
+        });
+
+        UnibuyStateViewQuoter.QuoteResult memory multi =
+            quoter.quoteTakeOrderExactOutput(poolKey.currency0, path, amountOut);
+
+        assertEq(multi.amountIn, single.amountIn, "amountIn mismatch");
+        assertEq(multi.amountOut, single.amountOut, "amountOut mismatch");
+        assertEq(multi.protocolFee, single.protocolFee, "protocolFee mismatch");
+        assertEq(multi.sqrtPriceX96After, single.sqrtPriceX96After, "sqrtPrice mismatch");
+        assertEq(multi.tickAfter, single.tickAfter, "tick mismatch");
+        assertEq(multi.poolHeightAfter, single.poolHeightAfter, "height mismatch");
+    }
+
+    /// @dev A non-initialized path pool should revert for exact-input path quotes.
+    function test_quoteTakeOrderExactInput_pathRevertsForUninitializedPool() public {
+        _placeSellOrder(alice, TL, TU, LIQ);
+
+        UnibuyStateViewQuoter.QuotePathKey[] memory path =
+            new UnibuyStateViewQuoter.QuotePathKey[](1);
+        path[0] = UnibuyStateViewQuoter.QuotePathKey({
+            hopCurrency: Currency.wrap(address(tokenC)),
+            tickSpacing: TICK_SPACING
+        });
+
+        vm.expectRevert();
+        quoter.quoteTakeOrderExactInput(poolKey.currency1, path, 1e15);
+    }
+
+    /// @dev A non-initialized path pool should revert for exact-output path quotes.
+    function test_quoteTakeOrderExactOutput_pathRevertsForUninitializedPool() public {
+        _placeSellOrder(alice, TL, TU, LIQ);
+
+        UnibuyStateViewQuoter.QuotePathKey[] memory path =
+            new UnibuyStateViewQuoter.QuotePathKey[](1);
+        path[0] = UnibuyStateViewQuoter.QuotePathKey({
+            hopCurrency: Currency.wrap(address(tokenC)),
+            tickSpacing: TICK_SPACING
+        });
+
+        vm.expectRevert();
+        quoter.quoteTakeOrderExactOutput(poolKey.currency0, path, 5e14);
+    }
+
+    /// @dev Loader should revert for a non-existent token because ownerOf(tokenId) reverts.
+    function test_loadOrderInspectionData_nonexistentTokenReverts() public {
+        vm.expectRevert();
+        quoter.loadOrderInspectionData(type(uint256).max);
+    }
+
+    /// @dev All inspection entry points should revert for a non-existent tokenId.
+    function test_inspectionFunctions_nonexistentTokenRevert() public {
+        uint256 missingTokenId = type(uint256).max;
+
+        vm.expectRevert();
+        quoter.getOrderCrossedStatus(missingTokenId);
+
+        vm.expectRevert();
+        quoter.getOrderToken0AndCompensation(missingTokenId);
+
+        vm.expectRevert();
+        quoter.simulateCloseOrder(missingTokenId);
+
+        vm.expectRevert();
+        quoter.getFullOrderInfo(missingTokenId);
+    }
+
+    // ─────────────────────────────────────────────────────────────────────────
     // Internal helpers
     // ─────────────────────────────────────────────────────────────────────────
 

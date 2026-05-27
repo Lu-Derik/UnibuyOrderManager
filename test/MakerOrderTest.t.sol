@@ -14,6 +14,24 @@ contract MakerOrderTest is OrderManagerTestBase {
     int24  constant TL  = 60;
     int24  constant TU  = 180;
     uint128 constant LIQ = 10e18;
+    uint256 private _day;
+
+    function _advanceDayWithCrossing(int24 tickL) internal returns (int24 nextTickL) {
+        _day++;
+        vm.warp(1 + _day * 86400);
+
+        int24 tickU = tickL + 2 * TICK_SPACING;
+        _placeSellOrder(bob, tickL, tickU, 5e18);
+        _takerBuy(dave, 1e30, TickMath.getSqrtPriceAtTick(tickU));
+        nextTickL = tickU + TICK_SPACING;
+    }
+
+    function _advanceNDaysWithCrossings(uint8 n) internal {
+        int24 tickL = TU + TICK_SPACING;
+        for (uint8 i = 0; i < n; i++) {
+            tickL = _advanceDayWithCrossing(tickL);
+        }
+    }
 
     // ─────────────────────────────────────────────────────────────────────────
     // placeSellOrder (挂单卖出)
@@ -269,6 +287,63 @@ contract MakerOrderTest is OrderManagerTestBase {
 
         vm.expectRevert();
         orderManager.ownerOf(tokenId);
+    }
+
+    function test_closeOrderAuto_revert_notFullyCrossed() public {
+        (uint256 tokenId,) = _placeSellOrder(alice, TL, TU, LIQ);
+
+        vm.prank(bob);
+        vm.expectRevert(abi.encodeWithSelector(IUnibuyOrderManager.AutoCloseNotEligible.selector, tokenId));
+        orderManager.closeOrderAuto(tokenId, block.timestamp + 1 hours);
+    }
+
+    function test_closeOrderAuto_revert_beforeSevenDays() public {
+        (uint256 tokenId,) = _placeSellOrder(alice, TL, TU, LIQ);
+        _takerBuy(dave, 100_000e18, TickMath.getSqrtPriceAtTick(TU + TICK_SPACING));
+
+        // 7 day snapshots are not enough; condition requires older than 7 days.
+        _advanceNDaysWithCrossings(7);
+
+        vm.prank(bob);
+        vm.expectRevert(abi.encodeWithSelector(IUnibuyOrderManager.AutoCloseNotEligible.selector, tokenId));
+        orderManager.closeOrderAuto(tokenId, block.timestamp + 1 hours);
+    }
+
+    function test_closeOrderAuto_anyoneCanClose_afterSevenDays_andPayCloserFee() public {
+        orderManager.setAutoCloseFeeBips(TICK_SPACING, 50); // 0.50%
+
+        (uint256 tokenId,) = _placeSellOrder(alice, TL, TU, LIQ);
+        _takerBuy(dave, 100_000e18, TickMath.getSqrtPriceAtTick(TU + TICK_SPACING));
+
+        _advanceNDaysWithCrossings(8);
+
+        uint256 ownerToken1Before = tokenB.balanceOf(alice);
+        uint256 closerToken1Before = tokenB.balanceOf(carol);
+        uint256 closerToken0Before = tokenA.balanceOf(carol);
+
+        vm.prank(carol);
+        orderManager.closeOrderAuto(tokenId, block.timestamp + 1 hours);
+
+        vm.expectRevert();
+        orderManager.ownerOf(tokenId);
+
+        uint256 ownerToken1After = tokenB.balanceOf(alice);
+        uint256 closerToken1After = tokenB.balanceOf(carol);
+        uint256 closerToken0After = tokenA.balanceOf(carol);
+
+        assertGt(ownerToken1After, ownerToken1Before, "token1 proceeds should go to owner");
+        assertGt(closerToken1After, closerToken1Before, "closer should receive token1 fee");
+        assertEq(closerToken0After, closerToken0Before, "closer should not receive token0");
+    }
+
+    function test_setAutoCloseFeeBips_onlyController() public {
+        vm.prank(alice);
+        vm.expectRevert(abi.encodeWithSelector(IUnibuyOrderManager.OnlyAutoCloseFeeController.selector));
+        orderManager.setAutoCloseFeeBips(TICK_SPACING, 25);
+
+        // Controller is deployer (this test contract in setUp)
+        orderManager.setAutoCloseFeeBips(TICK_SPACING, 25);
+        assertEq(orderManager.autoCloseFeeBips(TICK_SPACING), 25, "controller should update fee bips");
     }
 
     function test_closeMakerOrder_clearsOrderInfoSlot() public {

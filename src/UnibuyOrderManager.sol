@@ -66,6 +66,13 @@ contract UnibuyOrderManager is
     ///         Populated on first makeOrder for a given pool (mirrors PositionManager.poolKeys).
     mapping(bytes19 poolId => UnibuyPoolKey) public poolKeys;
 
+    /// @inheritdoc IUnibuyOrderManager
+    mapping(int24 tickSpacing => uint8 feeBips) public autoCloseFeeBips;
+
+    /// @inheritdoc IUnibuyOrderManager
+    // forge-lint: disable-next-line(screaming-snake-case-immutable)
+    address public immutable autoCloseFeeController;
+
     // ─────────────────────────────────────────────────────────────────────────
     // Constructor
     // ─────────────────────────────────────────────────────────────────────────
@@ -75,7 +82,9 @@ contract UnibuyOrderManager is
         BaseActionsRouter(IUnibuyPoolManager(_poolManager))
         Permit2Forwarder(_permit2)
         NativeWrapper(_weth9)
-    {}
+    {
+        autoCloseFeeController = msg.sender;
+    }
 
     // ─────────────────────────────────────────────────────────────────────────
     // Deadline modifier
@@ -314,6 +323,32 @@ contract UnibuyOrderManager is
         _executeActions(abi.encode(actions, params));
     }
 
+    /// @inheritdoc IUnibuyOrderManager
+    function closeOrderAuto(
+        uint256 tokenId,
+        uint256 deadline
+    )
+        external
+        isNotLocked
+        checkDeadline(deadline)
+    {
+        // Reuse stored pool key shape and tokenId payload used by closeOrder.
+        bytes19 poolId = _orders[tokenId].poolId();
+        UnibuyPoolKey memory resolvedPool = poolKeys[poolId];
+
+        bytes memory actions = abi.encodePacked(Actions.CLOSE_ORDER_AUTO);
+        bytes[] memory params = new bytes[](1);
+        params[0] = abi.encode(resolvedPool, tokenId);
+
+        _executeActions(abi.encode(actions, params));
+    }
+
+    /// @inheritdoc IUnibuyOrderManager
+    function setAutoCloseFeeBips(int24 tickSpacing, uint8 feeBips) external {
+        if (msg.sender != autoCloseFeeController) revert OnlyAutoCloseFeeController();
+        autoCloseFeeBips[tickSpacing] = feeBips;
+    }
+
     // ─────────────────────────────────────────────────────────────────────────
     // Batch execute (primary entry point for advanced / multi-step usage)
     // ─────────────────────────────────────────────────────────────────────────
@@ -351,6 +386,8 @@ contract UnibuyOrderManager is
             _handleMakeOrderWithTake(params);
         } else if (action == Actions.CLOSE_ORDER) {
             _handleClose(params);
+        } else if (action == Actions.CLOSE_ORDER_AUTO) {
+            _handleCloseAuto(params);
         } else if (action == Actions.SETTLE) {
             _handleSettle(params);
         } else if (action == Actions.SETTLE_ALL) {
@@ -587,7 +624,7 @@ contract UnibuyOrderManager is
         int24 tickLower = orderInfo.tickLower();
         int24 tickUpper = orderInfo.tickUpper();
 
-        (int128 delta0, int128 delta1) =
+        (int128 delta0, int128 delta1,) =
             poolManager.closeOrder(orderPoolKey, tickLower, tickUpper, bytes32(tokenId));
 
         if (delta0 == 0 && orderInfo.chained() && delta1 > 0) {
@@ -607,6 +644,61 @@ contract UnibuyOrderManager is
 
                 _makeOrderInternal(orderPoolKey.mirrorKey(), mirrorOrderInfo, mirrorLiquidity, tokenOwner);
             }
+        }
+
+        _orders[tokenId] = PackedOrderInfo.wrap(0);
+        _burn(tokenId);
+    }
+
+    /// @dev Permissionless close for stale fully-crossed orders.
+    ///      Requirements:
+    ///      1) currentTick >= tickUpper
+    ///      2) first crossing at/after orderHeight happened more than 7 days ago
+    ///         (crossHeight < slot1.heights[7], and heights[7] is initialized)
+    ///      Token1 proceeds are always paid to token owner.
+    ///      Closer fee is additionally settled from token owner and paid to closer.
+    function _handleCloseAuto(bytes calldata params) internal {
+        (, uint256 tokenId) = params.decodeCloseMakerParams();
+
+        address closer = _getLocker();
+        address tokenOwner = ownerOf(tokenId);
+
+        PackedOrderInfo orderInfo = _orders[tokenId];
+        UnibuyPoolKey memory orderPoolKey = poolKeys[orderInfo.poolId()];
+
+        int24 tickLower = orderInfo.tickLower();
+        int24 tickUpper = orderInfo.tickUpper();
+        (int128 delta0, int128 delta1, bool bCloseLate) =
+            poolManager.closeOrder(orderPoolKey, tickLower, tickUpper, bytes32(tokenId));
+        if (!bCloseLate) revert AutoCloseNotEligible(tokenId);
+
+        // Token1 must be settled to owner only.
+        if (delta1 > 0) {
+            // forge-lint: disable-next-line(unsafe-typecast)
+            _take(orderPoolKey.currency1, tokenOwner, uint256(uint128(delta1)));
+        } else if (delta1 < 0) {
+            // forge-lint: disable-next-line(unsafe-typecast)
+            _settle(orderPoolKey.currency1, tokenOwner, uint256(uint128(-delta1)));
+        }
+
+        uint8 feeBips = autoCloseFeeBips[orderPoolKey.tickSpacing];
+        if (feeBips > 0 && closer != tokenOwner && delta1 > 0) {
+            // forge-lint: disable-next-line(unsafe-typecast)
+            uint256 token1Out = uint256(uint128(delta1));
+            uint256 closerFee = FullMath.mulDiv(token1Out, feeBips, 10_000);
+            if (closerFee > 0) {
+                _settle(orderPoolKey.currency1, tokenOwner, closerFee);
+                _take(orderPoolKey.currency1, closer, closerFee);
+            }
+        }
+
+        // Any residual token0 is still settled to owner.
+        if (delta0 > 0) {
+            // forge-lint: disable-next-line(unsafe-typecast)
+            _take(orderPoolKey.currency0, tokenOwner, uint256(uint128(delta0)));
+        } else if (delta0 < 0) {
+            // forge-lint: disable-next-line(unsafe-typecast)
+            _settle(orderPoolKey.currency0, tokenOwner, uint256(uint128(-delta0)));
         }
 
         _orders[tokenId] = PackedOrderInfo.wrap(0);

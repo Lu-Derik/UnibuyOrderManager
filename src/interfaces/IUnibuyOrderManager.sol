@@ -52,6 +52,8 @@ interface IUnibuyOrderManager {
     error InvalidActionType(uint8 action);
     error TooLittleReceived(uint256 minAmountOut, uint256 actualAmountOut);
     error TooMuchRequested(uint256 maxAmountIn, uint256 actualAmountIn);
+    error AutoCloseNotEligible(uint256 tokenId);
+    error OnlyAutoCloseFeeController();
 
     // ─────────────────────────────────────────────────────────────────────────
     // Taker order
@@ -167,6 +169,24 @@ interface IUnibuyOrderManager {
         uint256 tokenId,
         uint256 deadline
     ) external;
+
+    /// @notice Permissionless close path for stale fully-crossed orders.
+    ///         Callable by anyone when order is fully crossed and crossing happened >7 days ago.
+    ///         token1 proceeds are always paid to the NFT owner.
+    ///         Closer incentive is paid by owner at rate configured per tickSpacing.
+    function closeOrderAuto(
+        uint256 tokenId,
+        uint256 deadline
+    ) external;
+
+    /// @notice Set closer incentive fee rate (in bips) for a tick spacing tier.
+    function setAutoCloseFeeBips(int24 tickSpacing, uint8 feeBips) external;
+
+    /// @notice Configured closer incentive fee rate (in bips) for a tick spacing tier.
+    function autoCloseFeeBips(int24 tickSpacing) external view returns (uint8);
+
+    /// @notice Address allowed to configure auto-close fee rates.
+    function autoCloseFeeController() external view returns (address);
 
     // ─────────────────────────────────────────────────────────────────────────
     // Batch execute

@@ -54,22 +54,30 @@ contract StateViewQuoterTest is OrderManagerTestBase {
         // ── second pair (tokenB / tokenC) for multi-hop ──────────────────────
         tokenC = new TestERC20("Token C", "TKC", 18);
 
-        // Ensure token ordering: tokenB < tokenC (sort by address)
-        if (address(tokenB) > address(tokenC)) {
-            // swap so currency0 < currency1
-            TestERC20 tmp = tokenB; tokenB = tokenC; tokenC = tmp;
+        // Build pool keys in canonical currency order without mutating base fixtures.
+        if (address(tokenB) < address(tokenC)) {
+            poolBC = UnibuyPoolKey({
+                currency0:   Currency.wrap(address(tokenB)),
+                currency1:  Currency.wrap(address(tokenC)),
+                tickSpacing: TICK_SPACING
+            });
+            mirrorBC = UnibuyPoolKey({
+                currency0:   Currency.wrap(address(tokenC)),
+                currency1:  Currency.wrap(address(tokenB)),
+                tickSpacing: TICK_SPACING
+            });
+        } else {
+            poolBC = UnibuyPoolKey({
+                currency0:   Currency.wrap(address(tokenC)),
+                currency1:  Currency.wrap(address(tokenB)),
+                tickSpacing: TICK_SPACING
+            });
+            mirrorBC = UnibuyPoolKey({
+                currency0:   Currency.wrap(address(tokenB)),
+                currency1:  Currency.wrap(address(tokenC)),
+                tickSpacing: TICK_SPACING
+            });
         }
-
-        poolBC = UnibuyPoolKey({
-            currency0:   Currency.wrap(address(tokenB)),
-            currency1:  Currency.wrap(address(tokenC)),
-            tickSpacing: TICK_SPACING
-        });
-        mirrorBC = UnibuyPoolKey({
-            currency0:   Currency.wrap(address(tokenC)),
-            currency1:  Currency.wrap(address(tokenB)),
-            tickSpacing: TICK_SPACING
-        });
 
         uint24 poolFee = PoolFeeLibrary.pack(TAKER_FEE, MAKER_FEE, OFFSET_FEE);
         IProtocolFees(address(poolManager)).setTickSpacingSettings(
@@ -77,9 +85,14 @@ contract StateViewQuoterTest is OrderManagerTestBase {
         );
         poolManager.initialize(poolBC, SQRT_PRICE_1_1);
 
-        // Fund actors with tokenC
+        // Fund and approve both sides used by poolBC/mirrorBC.
+        // tokenB/tokenC may have been swapped above to satisfy currency ordering.
         address[4] memory actors = [alice, bob, carol, dave];
         for (uint256 i = 0; i < actors.length; i++) {
+            tokenB.mint(actors[i], 10_000_000 ether);
+            vm.prank(actors[i]);
+            tokenB.approve(address(orderManager), type(uint256).max);
+
             tokenC.mint(actors[i], 10_000_000 ether);
             vm.prank(actors[i]);
             tokenC.approve(address(orderManager), type(uint256).max);
@@ -442,8 +455,14 @@ contract StateViewQuoterTest is OrderManagerTestBase {
     function test_quoteTakeOrderExactInput_twoHops() public {
         // Seed forward pool [TL, TU]
         _placeSellOrder(alice, TL, TU, LIQ);
-        // Seed second hop pool — sell tokenB for tokenC
-        _placeSellOrderInPool(alice, poolBC, mirrorBC, TL, TU, LIQ);
+        // Build an address-order agnostic route: other -> tokenB -> tokenA.
+        Currency intermediary = poolKey.currency1; // tokenB in base poolKey
+        Currency other = poolBC.currency0 == intermediary ? poolBC.currency1 : poolBC.currency0;
+        UnibuyPoolKey memory firstHopPool =
+            (poolBC.currency0 == intermediary && poolBC.currency1 == other) ? poolBC : mirrorBC;
+
+        // Seed first-hop pool with liquidity in the direction (other -> intermediary).
+        _placeSellOrderInPool(alice, firstHopPool, firstHopPool, TL, TU, LIQ);
 
         // Build path: start with tokenB → tokenA (poolKey) → tokenC (poolBC via mirror)
         // In Unibuy poolKey, currency0=tokenA, currency1=tokenB → taker pays tokenB and receives tokenA
@@ -469,14 +488,14 @@ contract StateViewQuoterTest is OrderManagerTestBase {
         // Wait — for path[1] to work, the pool must be (c0=hopCurrency=tokenA, c1=currencyIn after hop0=tokenB)
         // which matches poolKey. ✓
         
-        Currency currencyIn = Currency.wrap(address(tokenC));
+        Currency currencyIn = other;
         UnibuyStateViewQuoter.QuotePathKey[] memory path = new UnibuyStateViewQuoter.QuotePathKey[](2);
         path[0] = UnibuyStateViewQuoter.QuotePathKey({
-            hopCurrency: Currency.wrap(address(tokenB)),
+            hopCurrency: intermediary,
             tickSpacing:  TICK_SPACING
         });
         path[1] = UnibuyStateViewQuoter.QuotePathKey({
-            hopCurrency: Currency.wrap(address(tokenA)),
+            hopCurrency: poolKey.currency0,
             tickSpacing:  TICK_SPACING
         });
 
@@ -504,19 +523,24 @@ contract StateViewQuoterTest is OrderManagerTestBase {
     ///   i=0: hopKey = {c0=currencyOut=tokenB, c1=path[0].hopCurrency=tokenC} = poolBC ✓
     function test_quoteTakeOrderExactOutput_twoHops() public {
         _placeSellOrder(alice, TL, TU, LIQ);
-        // Seed poolBC (c0=tokenB, c1=tokenC) so hop i=0 has liquidity
-        _placeSellOrderInPool(alice, poolBC, mirrorBC, TL, TU, LIQ);
+        Currency intermediary = poolKey.currency1; // tokenB in base poolKey
+        Currency other = poolBC.currency0 == intermediary ? poolBC.currency1 : poolBC.currency0;
+        UnibuyPoolKey memory firstHopPool =
+            (poolBC.currency0 == intermediary && poolBC.currency1 == other) ? poolBC : mirrorBC;
 
-        Currency currencyOut = Currency.wrap(address(tokenA));
+        // Seed the pool used for reverse step i=0: hopKey = {intermediary, other}.
+        _placeSellOrderInPool(alice, firstHopPool, firstHopPool, TL, TU, LIQ);
+
+        Currency currencyOut = poolKey.currency0;
         UnibuyStateViewQuoter.QuotePathKey[] memory path = new UnibuyStateViewQuoter.QuotePathKey[](2);
-        // path[0] executed last (i=0): pool = {c0=tokenB, c1=tokenC} = poolBC
+        // path[0] executed last (i=0): pool = {c0=intermediary, c1=other}
         path[0] = UnibuyStateViewQuoter.QuotePathKey({
-            hopCurrency: Currency.wrap(address(tokenC)),
+            hopCurrency: other,
             tickSpacing:  TICK_SPACING
         });
-        // path[1] executed first (i=1): pool = {c0=tokenA, c1=tokenB} = poolKey
+        // path[1] executed first (i=1): pool = {c0=tokenA, c1=intermediary} = poolKey
         path[1] = UnibuyStateViewQuoter.QuotePathKey({
-            hopCurrency: Currency.wrap(address(tokenB)),
+            hopCurrency: intermediary,
             tickSpacing:  TICK_SPACING
         });
 
@@ -538,19 +562,23 @@ contract StateViewQuoterTest is OrderManagerTestBase {
     /// @dev Multi-hop exact-output quote must not permanently mutate pool state.
     function test_quoteTakeOrderExactOutput_doesNotMutateState() public {
         _placeSellOrder(alice, TL, TU, LIQ);
-        _placeSellOrderInPool(alice, poolBC, mirrorBC, TL, TU, LIQ);
+        Currency intermediary = poolKey.currency1;
+        Currency other = poolBC.currency0 == intermediary ? poolBC.currency1 : poolBC.currency0;
+        UnibuyPoolKey memory firstHopPool =
+            (poolBC.currency0 == intermediary && poolBC.currency1 == other) ? poolBC : mirrorBC;
+        _placeSellOrderInPool(alice, firstHopPool, firstHopPool, TL, TU, LIQ);
 
         (uint160 sqrtBefore,,) = _getSlot0Fwd();
 
-        Currency currencyOut = Currency.wrap(address(tokenA));
+        Currency currencyOut = poolKey.currency0;
         UnibuyStateViewQuoter.QuotePathKey[] memory path = new UnibuyStateViewQuoter.QuotePathKey[](2);
         // Same path as test_quoteTakeOrderExactOutput_twoHops
         path[0] = UnibuyStateViewQuoter.QuotePathKey({
-            hopCurrency: Currency.wrap(address(tokenC)),
+            hopCurrency: other,
             tickSpacing:  TICK_SPACING
         });
         path[1] = UnibuyStateViewQuoter.QuotePathKey({
-            hopCurrency: Currency.wrap(address(tokenB)),
+            hopCurrency: intermediary,
             tickSpacing:  TICK_SPACING
         });
         quoter.quoteTakeOrderExactOutput(currencyOut, path, 5e14);

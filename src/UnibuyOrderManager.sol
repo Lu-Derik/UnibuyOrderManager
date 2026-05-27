@@ -586,10 +586,10 @@ contract UnibuyOrderManager is
         int24 tickLower = orderInfo.tickLower();
         int24 tickUpper = orderInfo.tickUpper();
 
-        (, int128 delta1, bool fullyClosed) =
+        (int128 delta0, int128 delta1) =
             poolManager.closeOrder(orderPoolKey, tickLower, tickUpper, bytes32(tokenId));
 
-        if (fullyClosed && orderInfo.chained() && delta1 > 0) {
+        if (delta0 == 0 && orderInfo.chained() && delta1 > 0) {
             // Roll all received token1 into the mirror pool in [tickLowerMirror, tickUpperMirror].
             uint256 amount1Received = uint256(uint128(delta1));
             int24 tickLowerMirror = orderInfo.tickLowerMirror();

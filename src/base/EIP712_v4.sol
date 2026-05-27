@@ -26,6 +26,7 @@ contract EIP712_v4 is IEIP712_v4 {
     }
 
     /// @inheritdoc IEIP712_v4
+    // forge-lint: disable-next-line(mixed-case-function)
     function DOMAIN_SEPARATOR() public view returns (bytes32) {
         // uses cached version if chainid is unchanged from construction
         return block.chainid == _CACHED_CHAIN_ID ? _CACHED_DOMAIN_SEPARATOR : _buildDomainSeparator();
@@ -33,6 +34,7 @@ contract EIP712_v4 is IEIP712_v4 {
 
     /// @notice Builds a domain separator using the current chainId and contract address.
     function _buildDomainSeparator() private view returns (bytes32) {
+        // forge-lint: disable-next-line(asm-keccak256)
         return keccak256(abi.encode(_TYPE_HASH, _HASHED_NAME, block.chainid, address(this)));
     }
 

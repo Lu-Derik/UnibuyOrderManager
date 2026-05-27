@@ -14,6 +14,7 @@ library ERC721PermitHash {
         pure
         returns (bytes32)
     {
+        // forge-lint: disable-next-line(asm-keccak256)
         return keccak256(abi.encode(PERMIT_TYPEHASH, spender, tokenId, nonce, deadline));
     }
 
@@ -22,6 +23,7 @@ library ERC721PermitHash {
         pure
         returns (bytes32)
     {
+        // forge-lint: disable-next-line(asm-keccak256)
         return keccak256(abi.encode(PERMIT_FOR_ALL_TYPEHASH, operator, approved, nonce, deadline));
     }
 }

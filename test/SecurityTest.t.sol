@@ -1,16 +1,13 @@
 // SPDX-License-Identifier: MIT
 pragma solidity ^0.8.26;
 
-import "forge-std/Test.sol";
 import {OrderManagerTestBase} from "./helpers/OrderManagerTestBase.t.sol";
 import {UnibuyOrderManager}   from "../src/UnibuyOrderManager.sol";
 import {ERC721PermitHash}     from "../src/libraries/ERC721PermitHash.sol";
 
-import {UnibuyPoolKey, UnibuyPoolId, UnibuyPoolIdLibrary} from "@unibuy/types/UnibuyPoolKey.sol";
-import {Currency, CurrencyLibrary} from "@unibuy/types/Currency.sol";
+import {UnibuyPoolKey, UnibuyPoolIdLibrary} from "@unibuy/types/UnibuyPoolKey.sol";
+import {Currency} from "@unibuy/types/Currency.sol";
 import {TickMath}        from "@unibuy/libraries/TickMath.sol";
-import {IProtocolFees}   from "@unibuy/interfaces/IProtocolFees.sol";
-import {PoolFeeLibrary}  from "@unibuy/libraries/PoolFeeLibrary.sol";
 
 // ─────────────────────────────────────────────────────────────────────────────
 // Helper: malicious ERC-20 that attempts a reentrant call into orderManager
@@ -134,9 +131,13 @@ contract ReentrantERC20 {
         uint256 flags = (chained ? 1 : 0) | (autoClose ? 2 : 0);
         return
             flags |
+            // forge-lint: disable-next-line(unsafe-typecast)
             (uint256(uint24(tickLower)) << 8) |
+            // forge-lint: disable-next-line(unsafe-typecast)
             (uint256(uint24(tickUpper)) << 32) |
+            // forge-lint: disable-next-line(unsafe-typecast)
             (uint256(uint24(tickLowerMirror)) << 56) |
+            // forge-lint: disable-next-line(unsafe-typecast)
             (uint256(uint24(tickUpperMirror)) << 80);
     }
 

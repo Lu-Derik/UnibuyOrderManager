@@ -64,7 +64,9 @@ contract UnibuyStateViewQuoter is IUnlockCallback {
     // Immutables
     // ─────────────────────────────────────────────────────────────────────────
 
+    // forge-lint: disable-next-line(screaming-snake-case-immutable)
     IUnibuyPoolManager public immutable poolManager;
+    // forge-lint: disable-next-line(screaming-snake-case-immutable)
     IOrderManagerExtra public immutable orderManager;
 
     // ─────────────────────────────────────────────────────────────────────────
@@ -444,12 +446,15 @@ contract UnibuyStateViewQuoter is IUnlockCallback {
         uint160 sqrtPriceLimitX96
     ) internal {
         uint256 feeBefore = poolManager.protocolFeesAccrued(key.currency1);
+        // forge-lint: disable-next-line(unsafe-typecast)
         (int128 delta0, int128 delta1) = poolManager.takeOrder(key, -int256(amountIn), sqrtPriceLimitX96);
         uint256 feeAfter = poolManager.protocolFeesAccrued(key.currency1);
 
         (uint160 sqrtAfter, int24 tickAfter, uint32 heightAfter,,,,) = poolManager.getSlot0(key.toId());
 
+        // forge-lint: disable-next-line(unsafe-typecast)
         uint256 usedIn  = delta1 < 0 ? uint256(uint128(-delta1)) : 0;
+        // forge-lint: disable-next-line(unsafe-typecast)
         uint256 gotOut  = delta0 > 0 ? uint256(uint128(delta0))  : 0;
 
         revert QuoteRevert(usedIn, gotOut, feeAfter - feeBefore, sqrtAfter, tickAfter, heightAfter);
@@ -461,12 +466,15 @@ contract UnibuyStateViewQuoter is IUnlockCallback {
         uint160 sqrtPriceLimitX96
     ) internal {
         uint256 feeBefore = poolManager.protocolFeesAccrued(key.currency1);
+        // forge-lint: disable-next-line(unsafe-typecast)
         (int128 delta0, int128 delta1) = poolManager.takeOrder(key, int256(amountOut), sqrtPriceLimitX96);
         uint256 feeAfter = poolManager.protocolFeesAccrued(key.currency1);
 
         (uint160 sqrtAfter, int24 tickAfter, uint32 heightAfter,,,,) = poolManager.getSlot0(key.toId());
 
+        // forge-lint: disable-next-line(unsafe-typecast)
         uint256 usedIn = delta1 < 0 ? uint256(uint128(-delta1)) : 0;
+        // forge-lint: disable-next-line(unsafe-typecast)
         uint256 gotOut = delta0 > 0 ? uint256(uint128(delta0))  : 0;
 
         revert QuoteRevert(usedIn, gotOut, feeAfter - feeBefore, sqrtAfter, tickAfter, heightAfter);
@@ -493,13 +501,16 @@ contract UnibuyStateViewQuoter is IUnlockCallback {
 
             uint256 feeBefore = poolManager.protocolFeesAccrued(hopKey.currency1);
             (int128 delta0, int128 delta1) =
+                // forge-lint: disable-next-line(unsafe-typecast)
                 poolManager.takeOrder(hopKey, -int256(currentAmount), TickMath.MAX_SQRT_PRICE);
             uint256 feeAfter = poolManager.protocolFeesAccrued(hopKey.currency1);
 
             if (i == 0 && delta1 < 0) {
+                // forge-lint: disable-next-line(unsafe-typecast)
                 usedInFirstHop = uint256(uint128(-delta1));
             }
 
+            // forge-lint: disable-next-line(unsafe-typecast)
             currentAmount   = delta0 > 0 ? uint256(uint128(delta0)) : 0;
             totalProtocolFee += (feeAfter - feeBefore);
             currencyIn      = hop.hopCurrency;
@@ -530,9 +541,11 @@ contract UnibuyStateViewQuoter is IUnlockCallback {
             });
 
             uint256 feeBefore = poolManager.protocolFeesAccrued(hopKey.currency1);
+            // forge-lint: disable-next-line(unsafe-typecast)
             (, int128 delta1) = poolManager.takeOrder(hopKey, int256(currentRequiredIn), TickMath.MAX_SQRT_PRICE);
             uint256 feeAfter = poolManager.protocolFeesAccrued(hopKey.currency1);
 
+            // forge-lint: disable-next-line(unsafe-typecast)
             currentRequiredIn = delta1 < 0 ? uint256(uint128(-delta1)) : 0;
             totalProtocolFee += (feeAfter - feeBefore);
             currencyOut = hop.hopCurrency;
@@ -603,10 +616,13 @@ contract UnibuyStateViewQuoter is IUnlockCallback {
 
         uint96 deduction = o.amountDeduction;
         if (t1 >= uint256(deduction)) {
+            // forge-lint: disable-next-line(unsafe-typecast)
             result.delta1 = int128(int256(t1 - uint256(deduction)));
         } else {
+            // forge-lint: disable-next-line(unsafe-typecast)
             result.delta1 = -int128(int256(uint256(deduction) - t1));
         }
+        // forge-lint: disable-next-line(unsafe-typecast)
         result.delta0 = int128(int256(t0));
     }
 
@@ -707,8 +723,10 @@ contract UnibuyStateViewQuoter is IUnlockCallback {
         private pure
         returns (bytes32 lengthSlot, bytes32 dataStart)
     {
+        // forge-lint: disable-next-line(asm-keccak256)
         bytes32 stateSlot        = keccak256(abi.encode(UnibuyPoolId.unwrap(id), StateLibrary.POOLS_SLOT));
         bytes32 ticksMappingSlot = bytes32(uint256(stateSlot) + StateLibrary.TICKS_OFFSET);
+        // forge-lint: disable-next-line(asm-keccak256)
         bytes32 tickBase         = keccak256(abi.encode(int256(tick), ticksMappingSlot));
         lengthSlot               = bytes32(uint256(tickBase) + 2);
         dataStart                = keccak256(abi.encode(lengthSlot));
@@ -790,7 +808,9 @@ contract UnibuyStateViewQuoter is IUnlockCallback {
         result.amountIn          = amountIn;
         result.amountOut         = amountOut;
         result.protocolFee       = protocolFee;
+        // forge-lint: disable-next-line(unsafe-typecast)
         result.sqrtPriceX96After = uint160(sqrtWord);
+        // forge-lint: disable-next-line(unsafe-typecast)
         result.tickAfter         = int24(int256(tickWord));
         // forge-lint: disable-next-line(unsafe-typecast)
         result.poolHeightAfter   = uint32(heightWord);

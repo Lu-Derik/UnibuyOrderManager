@@ -7,6 +7,7 @@ import {IPermit2Forwarder, IAllowanceTransfer} from "../interfaces/IPermit2Forwa
 /// @dev This contract does not enforce the spender to be this contract, but that is the intended use case
 contract Permit2Forwarder is IPermit2Forwarder {
     /// @notice the Permit2 contract to forward approvals
+    // forge-lint: disable-next-line(screaming-snake-case-immutable)
     IAllowanceTransfer public immutable permit2;
 
     constructor(IAllowanceTransfer _permit2) {

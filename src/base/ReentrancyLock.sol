@@ -8,9 +8,17 @@ contract ReentrancyLock {
     error ContractLocked();
 
     modifier isNotLocked() {
+        _acquireLock();
+        _;
+        _releaseLock();
+    }
+
+    function _acquireLock() internal {
         if (Locker.get() != address(0)) revert ContractLocked();
         Locker.set(msg.sender);
-        _;
+    }
+
+    function _releaseLock() internal {
         Locker.set(address(0));
     }
 

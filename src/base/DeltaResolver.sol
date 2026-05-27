@@ -47,13 +47,15 @@ abstract contract DeltaResolver is ImmutableState {
     /// @param payer The address who should pay tokens
     /// @param amount The number of tokens to send
     function _pay(Currency token, address payer, uint256 amount) internal virtual {
-        IERC20Minimal(Currency.unwrap(token)).transferFrom(payer, address(poolManager), amount);
+        bool ok = IERC20Minimal(Currency.unwrap(token)).transferFrom(payer, address(poolManager), amount);
+        require(ok, "TRANSFER_FROM_FAILED");
     }
 
     /// @notice Returns the full outstanding debt (negative delta) owed to the pool for `currency`.
     /// @dev    Returns 0 if the delta is non-negative (no debt).
     function _getFullDebt(Currency currency) internal view returns (uint256) {
         int256 delta = poolManager.currencyDelta(address(this), currency);
+        // forge-lint: disable-next-line(unsafe-typecast)
         return delta < 0 ? uint256(-delta) : 0;
     }
 
@@ -62,6 +64,7 @@ abstract contract DeltaResolver is ImmutableState {
     /// @dev    Returns 0 if the delta is non-positive (no credit).
     function _getFullCredit(Currency currency) internal view returns (uint256) {
         int256 delta = poolManager.currencyDelta(address(this), currency);
+        // forge-lint: disable-next-line(unsafe-typecast)
         return delta > 0 ? uint256(delta) : 0;
     }
 }

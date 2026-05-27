@@ -366,6 +366,7 @@ contract UnibuyOrderManager is
         } else if (action == Actions.CLOSE_CURRENCY) {
             _handleCloseCurrency(params);
         } else {
+            // forge-lint: disable-next-line(unsafe-typecast)
             revert InvalidActionType(uint8(action));
         }
     }
@@ -591,6 +592,7 @@ contract UnibuyOrderManager is
 
         if (delta0 == 0 && orderInfo.chained() && delta1 > 0) {
             // Roll all received token1 into the mirror pool in [tickLowerMirror, tickUpperMirror].
+            // forge-lint: disable-next-line(unsafe-typecast)
             uint256 amount1Received = uint256(uint128(delta1));
             int24 tickLowerMirror = orderInfo.tickLowerMirror();
             int24 tickUpperMirror = orderInfo.tickUpperMirror();
@@ -741,8 +743,10 @@ contract UnibuyOrderManager is
         int256 currencyDelta = poolManager.currencyDelta(address(this), currency);
 
         if (currencyDelta < 0) {
+            // forge-lint: disable-next-line(unsafe-typecast)
             _settle(currency, owner, uint256(-currencyDelta));
         } else {
+            // forge-lint: disable-next-line(unsafe-typecast)
             _take(currency, owner, uint256(currencyDelta));
         }
     }

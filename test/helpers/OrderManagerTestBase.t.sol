@@ -7,7 +7,7 @@ import {UnibuyPoolManager}    from "@unibuy/UnibuyPoolManager.sol";
 import {IUnibuyPoolManager}   from "@unibuy/interfaces/IUnibuyPoolManager.sol";
 import {IProtocolFees}        from "@unibuy/interfaces/IProtocolFees.sol";
 import {PoolFeeLibrary}       from "@unibuy/libraries/PoolFeeLibrary.sol";
-import {UnibuyPoolKey, UnibuyPoolId, UnibuyPoolIdLibrary} from "@unibuy/types/UnibuyPoolKey.sol";
+import {UnibuyPoolKey, UnibuyPoolIdLibrary} from "@unibuy/types/UnibuyPoolKey.sol";
 import {Currency}             from "@unibuy/types/Currency.sol";
 import {StateLibrary}         from "@unibuy/libraries/StateLibrary.sol";
 import {TickMath}             from "@unibuy/libraries/TickMath.sol";
@@ -74,12 +74,12 @@ abstract contract OrderManagerTestBase is Test {
         
         // Create mock addresses for permit2 and WETH9
         address mockPermit2 = makeAddr("permit2");
-        address mockWETH9 = makeAddr("weth9");
+        address mockWeth9 = makeAddr("weth9");
         
         orderManager = new UnibuyOrderManager(
             address(poolManager),
             IAllowanceTransfer(mockPermit2),
-            IWETH9(mockWETH9)
+            IWETH9(mockWeth9)
         );
 
         poolKey = UnibuyPoolKey({

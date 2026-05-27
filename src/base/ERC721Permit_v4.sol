@@ -19,8 +19,12 @@ abstract contract ERC721Permit_v4 is ERC721, IERC721Permit_v4, EIP712_v4, Unorde
 
     /// @notice Checks if the block's timestamp is before a signature's deadline
     modifier checkSignatureDeadline(uint256 deadline) {
-        if (block.timestamp > deadline) revert SignatureDeadlineExpired();
+        _checkSignatureDeadline(deadline);
         _;
+    }
+
+    function _checkSignatureDeadline(uint256 deadline) internal view {
+        if (block.timestamp > deadline) revert SignatureDeadlineExpired();
     }
 
     /// @inheritdoc IERC721Permit_v4

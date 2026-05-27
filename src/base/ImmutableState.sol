@@ -6,13 +6,18 @@ import {IUnibuyPoolManager} from "@unibuy/interfaces/IUnibuyPoolManager.sol";
 /// @title ImmutableState for UnibuyOrderManager
 /// @notice Provides immutable poolManager and onlyPoolManager modifier
 abstract contract ImmutableState {
+    // forge-lint: disable-next-line(screaming-snake-case-immutable)
     IUnibuyPoolManager public immutable poolManager;
 
     error NotPoolManager();
 
     modifier onlyPoolManager() {
-        if (msg.sender != address(poolManager)) revert NotPoolManager();
+        _onlyPoolManager();
         _;
+    }
+
+    function _onlyPoolManager() internal view {
+        if (msg.sender != address(poolManager)) revert NotPoolManager();
     }
 
     constructor(IUnibuyPoolManager _poolManager) {

@@ -125,6 +125,7 @@ library OrderInfoLibrary {
     /// @dev Does not write to storage; returns updated packed value.
     function setTickLower(PackedOrderInfo info, int24 _tickLower) internal pure returns (PackedOrderInfo _info) {
         uint256 raw = PackedOrderInfo.unwrap(info);
+        // forge-lint: disable-next-line(unsafe-typecast)
         uint256 tickPart = (uint256(uint24(_tickLower)) & MASK_24_BITS) << TICK_LOWER_OFFSET;
         _info = PackedOrderInfo.wrap((raw & CLEAR_TICK_LOWER) | tickPart);
     }
@@ -132,6 +133,7 @@ library OrderInfoLibrary {
     /// @dev Does not write to storage; returns updated packed value.
     function setTickUpper(PackedOrderInfo info, int24 _tickUpper) internal pure returns (PackedOrderInfo _info) {
         uint256 raw = PackedOrderInfo.unwrap(info);
+        // forge-lint: disable-next-line(unsafe-typecast)
         uint256 tickPart = (uint256(uint24(_tickUpper)) & MASK_24_BITS) << TICK_UPPER_OFFSET;
         _info = PackedOrderInfo.wrap((raw & CLEAR_TICK_UPPER) | tickPart);
     }
@@ -143,6 +145,7 @@ library OrderInfoLibrary {
         returns (PackedOrderInfo _info)
     {
         uint256 raw = PackedOrderInfo.unwrap(info);
+        // forge-lint: disable-next-line(unsafe-typecast)
         uint256 tickPart = (uint256(uint24(_tickLowerMirror)) & MASK_24_BITS) << TICK_LOWER_MIRROR_OFFSET;
         _info = PackedOrderInfo.wrap((raw & CLEAR_TICK_LOWER_MIRROR) | tickPart);
     }
@@ -154,6 +157,7 @@ library OrderInfoLibrary {
         returns (PackedOrderInfo _info)
     {
         uint256 raw = PackedOrderInfo.unwrap(info);
+        // forge-lint: disable-next-line(unsafe-typecast)
         uint256 tickPart = (uint256(uint24(_tickUpperMirror)) & MASK_24_BITS) << TICK_UPPER_MIRROR_OFFSET;
         _info = PackedOrderInfo.wrap((raw & CLEAR_TICK_UPPER_MIRROR) | tickPart);
     }

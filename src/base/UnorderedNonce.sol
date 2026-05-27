@@ -14,9 +14,9 @@ contract UnorderedNonce is IUnorderedNonce {
     /// @param nonce uint256, the nonce to consume. The top 248 bits are the word, the bottom 8 bits indicate the bit position
     function _useUnorderedNonce(address owner, uint256 nonce) internal {
         uint256 wordPos = nonce >> 8;
-        uint256 bitPos = uint8(nonce);
+        uint256 bitPos = nonce & 0xFF;
 
-        uint256 bit = 1 << bitPos;
+        uint256 bit = uint256(1) << bitPos;
         uint256 flipped = nonces[owner][wordPos] ^= bit;
         if (flipped & bit == 0) revert NonceAlreadyUsed();
     }

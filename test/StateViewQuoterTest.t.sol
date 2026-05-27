@@ -3,11 +3,10 @@ pragma solidity ^0.8.26;
 
 import {OrderManagerTestBase}  from "./helpers/OrderManagerTestBase.t.sol";
 import {UnibuyStateViewQuoter} from "../src/UnibuyStateViewQuoter.sol";
-import {UnibuyPoolManager}     from "@unibuy/UnibuyPoolManager.sol";
 import {IUnibuyPoolManager}    from "@unibuy/interfaces/IUnibuyPoolManager.sol";
 import {IProtocolFees}         from "@unibuy/interfaces/IProtocolFees.sol";
 import {PoolFeeLibrary}        from "@unibuy/libraries/PoolFeeLibrary.sol";
-import {UnibuyPoolKey, UnibuyPoolId, UnibuyPoolIdLibrary} from "@unibuy/types/UnibuyPoolKey.sol";
+import {UnibuyPoolKey, UnibuyPoolIdLibrary} from "@unibuy/types/UnibuyPoolKey.sol";
 import {Currency}              from "@unibuy/types/Currency.sol";
 import {OrderInfo}             from "@unibuy/types/UnibuyTypes.sol";
 import {StateLibrary}          from "@unibuy/libraries/StateLibrary.sol";
@@ -36,8 +35,8 @@ contract StateViewQuoterTest is OrderManagerTestBase {
 
     /// @dev Third token + pools for multi-hop tests (tokenB ↔ tokenC).
     TestERC20      internal tokenC;
-    UnibuyPoolKey  internal poolBC;    // sell tokenB for tokenC
-    UnibuyPoolKey  internal mirrorBC;  // sell tokenC for tokenB
+    UnibuyPoolKey  internal poolBc;    // sell tokenB for tokenC
+    UnibuyPoolKey  internal mirrorBc;  // sell tokenC for tokenB
 
     int24 internal constant TL  = 60;
     int24 internal constant TU  = 180;
@@ -53,23 +52,23 @@ contract StateViewQuoterTest is OrderManagerTestBase {
 
         // Build pool keys in canonical currency order without mutating base fixtures.
         if (address(tokenB) < address(tokenC)) {
-            poolBC = UnibuyPoolKey({
+            poolBc = UnibuyPoolKey({
                 currency0:   Currency.wrap(address(tokenB)),
                 currency1:  Currency.wrap(address(tokenC)),
                 tickSpacing: TICK_SPACING
             });
-            mirrorBC = UnibuyPoolKey({
+            mirrorBc = UnibuyPoolKey({
                 currency0:   Currency.wrap(address(tokenC)),
                 currency1:  Currency.wrap(address(tokenB)),
                 tickSpacing: TICK_SPACING
             });
         } else {
-            poolBC = UnibuyPoolKey({
+            poolBc = UnibuyPoolKey({
                 currency0:   Currency.wrap(address(tokenC)),
                 currency1:  Currency.wrap(address(tokenB)),
                 tickSpacing: TICK_SPACING
             });
-            mirrorBC = UnibuyPoolKey({
+            mirrorBc = UnibuyPoolKey({
                 currency0:   Currency.wrap(address(tokenB)),
                 currency1:  Currency.wrap(address(tokenC)),
                 tickSpacing: TICK_SPACING
@@ -80,9 +79,9 @@ contract StateViewQuoterTest is OrderManagerTestBase {
         IProtocolFees(address(poolManager)).setTickSpacingSettings(
             TICK_SPACING, poolFee, TICK_GAP_LIMIT
         );
-        poolManager.initialize(poolBC, SQRT_PRICE_1_1);
+        poolManager.initialize(poolBc, SQRT_PRICE_1_1);
 
-        // Fund and approve both sides used by poolBC/mirrorBC.
+        // Fund and approve both sides used by poolBc/mirrorBc.
         // tokenB/tokenC may have been swapped above to satisfy currency ordering.
         address[4] memory actors = [alice, bob, carol, dave];
         for (uint256 i = 0; i < actors.length; i++) {
@@ -210,6 +209,7 @@ contract StateViewQuoterTest is OrderManagerTestBase {
         _placeSellOrder(alice, TL, TU, LIQ);
 
         // Bitmap word = tick / 256 (accounting for tickSpacing compression: compressed = tick / tickSpacing)
+        // forge-lint: disable-next-line(unsafe-typecast)
         int16 wordPos = int16(TL / int24(TICK_SPACING) >> 8);
         uint256 bitmap = quoter.getTickBitmap(poolKey, wordPos);
 
@@ -220,6 +220,7 @@ contract StateViewQuoterTest is OrderManagerTestBase {
     function test_getTickBitmap_matchesRaw() public {
         _placeSellOrder(alice, TL, TU, LIQ);
 
+        // forge-lint: disable-next-line(unsafe-typecast)
         int16 wordPos = int16(TL / int24(TICK_SPACING) >> 8);
         uint256 fromQuoter = quoter.getTickBitmap(poolKey, wordPos);
         uint256 fromRaw    = IUnibuyPoolManager(address(poolManager)).getTickBitmap(poolKey.toId(), wordPos);
@@ -439,12 +440,12 @@ contract StateViewQuoterTest is OrderManagerTestBase {
     /// @dev Seed both pools and verify multi-hop exact-input quote succeeds.
     ///
     /// Path: tokenA → (poolKey: buy tokenA with tokenB) → tokenB
-    ///              → (poolBC:  buy tokenB with tokenC) → tokenC
+    ///              → (poolBc:  buy tokenB with tokenC) → tokenC
     ///
     /// In Unibuy a pool sells currency0 for currency1.
     /// To traverse poolKey receiving tokenA first, we think of it as:
     ///   currencyIn = tokenB,  hopCurrency = tokenA   [paying tokenB, receiving tokenA]
-    /// Then to traverse poolBC:
+    /// Then to traverse poolBc:
     ///   currencyIn = tokenA? No — we want to keep chaining.
     ///
     /// Simpler: just chain two single-hop exact-input calls through the forward pool twice
@@ -454,33 +455,33 @@ contract StateViewQuoterTest is OrderManagerTestBase {
         _placeSellOrder(alice, TL, TU, LIQ);
         // Build an address-order agnostic route: other -> tokenB -> tokenA.
         Currency intermediary = poolKey.currency1; // tokenB in base poolKey
-        Currency other = poolBC.currency0 == intermediary ? poolBC.currency1 : poolBC.currency0;
+        Currency other = poolBc.currency0 == intermediary ? poolBc.currency1 : poolBc.currency0;
         UnibuyPoolKey memory firstHopPool =
-            (poolBC.currency0 == intermediary && poolBC.currency1 == other) ? poolBC : mirrorBC;
+            (poolBc.currency0 == intermediary && poolBc.currency1 == other) ? poolBc : mirrorBc;
 
         // Seed first-hop pool with liquidity in the direction (other -> intermediary).
         _placeSellOrderInPool(alice, firstHopPool, firstHopPool, TL, TU, LIQ);
 
-        // Build path: start with tokenB → tokenA (poolKey) → tokenC (poolBC via mirror)
+        // Build path: start with tokenB → tokenA (poolKey) → tokenC (poolBc via mirror)
         // In Unibuy poolKey, currency0=tokenA, currency1=tokenB → taker pays tokenB and receives tokenA
-        // In poolBC,         currency0=tokenB, currency1=tokenC → taker pays tokenC and receives tokenB
+        // In poolBc,         currency0=tokenB, currency1=tokenC → taker pays tokenC and receives tokenB
         // For exact-input path:
         //   currencyIn = tokenB (first hop input)
         //   hop[0]: hopCurrency = tokenA (output of first hop), tickSpacing from poolKey
-        //   hop[1]: hopCurrency = tokenC (output of second hop), tickSpacing from poolBC
+        //   hop[1]: hopCurrency = tokenC (output of second hop), tickSpacing from poolBc
         //
         // But second hop pool: taker pays tokenA and receives tokenC → no direct pool.
-        // Use single-hop of poolKey only, then a single hop of mirrorBC.
+        // Use single-hop of poolKey only, then a single hop of mirrorBc.
 
         // Simplify: two-hop where both hops are in the forward pool direction:
         //   hop 0: currencyIn=tokenB, output=tokenA via poolKey
         //   hop 1: currencyIn=tokenA, output=tokenC is not available directly
         //
         // Instead route: tokenB → tokenA (poolKey) ← this is one hop. Stop.
-        // For a genuine 2-hop test: tokenC → tokenB (mirrorBC) → tokenA (poolKey)
+        // For a genuine 2-hop test: tokenC → tokenB (mirrorBc) → tokenA (poolKey)
         //
         //   currencyIn = tokenC
-        //   path[0]: hopCurrency=tokenB, tickSpacing=TICK_SPACING  (mirrorBC: c0=tokenC,c1=tokenB)
+        //   path[0]: hopCurrency=tokenB, tickSpacing=TICK_SPACING  (mirrorBc: c0=tokenC,c1=tokenB)
         //   path[1]: hopCurrency=tokenA, tickSpacing=TICK_SPACING  (poolKey:  c0=tokenA,c1=tokenB)
         // Wait — for path[1] to work, the pool must be (c0=hopCurrency=tokenA, c1=currencyIn after hop0=tokenB)
         // which matches poolKey. ✓
@@ -517,13 +518,13 @@ contract StateViewQuoterTest is OrderManagerTestBase {
     ///   _simulateExactOutputPath traverses path[length-1] → path[0].
     ///   i=1: hopKey = {c0=currencyOut=tokenA, c1=path[1].hopCurrency=tokenB} = poolKey ✓
     ///        → after: currencyOut = tokenB
-    ///   i=0: hopKey = {c0=currencyOut=tokenB, c1=path[0].hopCurrency=tokenC} = poolBC ✓
+    ///   i=0: hopKey = {c0=currencyOut=tokenB, c1=path[0].hopCurrency=tokenC} = poolBc ✓
     function test_quoteTakeOrderExactOutput_twoHops() public {
         _placeSellOrder(alice, TL, TU, LIQ);
         Currency intermediary = poolKey.currency1; // tokenB in base poolKey
-        Currency other = poolBC.currency0 == intermediary ? poolBC.currency1 : poolBC.currency0;
+        Currency other = poolBc.currency0 == intermediary ? poolBc.currency1 : poolBc.currency0;
         UnibuyPoolKey memory firstHopPool =
-            (poolBC.currency0 == intermediary && poolBC.currency1 == other) ? poolBC : mirrorBC;
+            (poolBc.currency0 == intermediary && poolBc.currency1 == other) ? poolBc : mirrorBc;
 
         // Seed the pool used for reverse step i=0: hopKey = {intermediary, other}.
         _placeSellOrderInPool(alice, firstHopPool, firstHopPool, TL, TU, LIQ);
@@ -560,9 +561,9 @@ contract StateViewQuoterTest is OrderManagerTestBase {
     function test_quoteTakeOrderExactOutput_doesNotMutateState() public {
         _placeSellOrder(alice, TL, TU, LIQ);
         Currency intermediary = poolKey.currency1;
-        Currency other = poolBC.currency0 == intermediary ? poolBC.currency1 : poolBC.currency0;
+        Currency other = poolBc.currency0 == intermediary ? poolBc.currency1 : poolBc.currency0;
         UnibuyPoolKey memory firstHopPool =
-            (poolBC.currency0 == intermediary && poolBC.currency1 == other) ? poolBC : mirrorBC;
+            (poolBc.currency0 == intermediary && poolBc.currency1 == other) ? poolBc : mirrorBc;
         _placeSellOrderInPool(alice, firstHopPool, firstHopPool, TL, TU, LIQ);
 
         (uint160 sqrtBefore,,) = _getSlot0Fwd();

@@ -70,8 +70,7 @@ contract UnibuyOrderManager is
     mapping(int24 tickSpacing => uint8 feeBips) public autoCloseFeeBips;
 
     /// @inheritdoc IUnibuyOrderManager
-    // forge-lint: disable-next-line(screaming-snake-case-immutable)
-    address public immutable autoCloseFeeController;
+    address public autoCloseFeeController;
 
     // ─────────────────────────────────────────────────────────────────────────
     // Constructor
@@ -343,6 +342,16 @@ contract UnibuyOrderManager is
     function setAutoCloseFeeBips(int24 tickSpacing, uint8 feeBips) external {
         if (msg.sender != autoCloseFeeController) revert OnlyAutoCloseFeeController();
         autoCloseFeeBips[tickSpacing] = feeBips;
+    }
+
+    /// @inheritdoc IUnibuyOrderManager
+    function setAutoCloseFeeController(address newController) external {
+        if (msg.sender != autoCloseFeeController) revert OnlyAutoCloseFeeController();
+        if (newController == address(0)) revert InvalidAutoCloseFeeController(newController);
+
+        address oldController = autoCloseFeeController;
+        autoCloseFeeController = newController;
+        emit AutoCloseFeeControllerUpdated(oldController, newController);
     }
 
     // ─────────────────────────────────────────────────────────────────────────

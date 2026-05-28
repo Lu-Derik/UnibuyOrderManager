@@ -388,6 +388,31 @@ contract MakerOrderTest is OrderManagerTestBase {
         assertEq(orderManager.autoCloseFeeBips(TICK_SPACING), 25, "controller should update fee bips");
     }
 
+    function test_setAutoCloseFeeController_onlyController() public {
+        vm.prank(alice);
+        vm.expectRevert(abi.encodeWithSelector(IUnibuyOrderManager.OnlyAutoCloseFeeController.selector));
+        orderManager.setAutoCloseFeeController(alice);
+
+        orderManager.setAutoCloseFeeController(alice);
+        assertEq(orderManager.autoCloseFeeController(), alice, "controller should be updated");
+    }
+
+    function test_setAutoCloseFeeController_rejectZeroAddress() public {
+        vm.expectRevert(abi.encodeWithSelector(IUnibuyOrderManager.InvalidAutoCloseFeeController.selector, address(0)));
+        orderManager.setAutoCloseFeeController(address(0));
+    }
+
+    function test_setAutoCloseFeeController_newControllerCanSetFee() public {
+        orderManager.setAutoCloseFeeController(alice);
+
+        vm.expectRevert(abi.encodeWithSelector(IUnibuyOrderManager.OnlyAutoCloseFeeController.selector));
+        orderManager.setAutoCloseFeeBips(TICK_SPACING, 12);
+
+        vm.prank(alice);
+        orderManager.setAutoCloseFeeBips(TICK_SPACING, 12);
+        assertEq(orderManager.autoCloseFeeBips(TICK_SPACING), 12, "new controller should update fee bips");
+    }
+
     function test_closeMakerOrder_clearsOrderInfoSlot() public {
         (uint256 tokenId,) = _placeSellOrder(alice, TL, TU, LIQ);
         _closeOrder(alice, tokenId);

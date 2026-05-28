@@ -54,6 +54,9 @@ interface IUnibuyOrderManager {
     error TooMuchRequested(uint256 maxAmountIn, uint256 actualAmountIn);
     error AutoCloseNotEligible(uint256 tokenId);
     error OnlyAutoCloseFeeController();
+    error InvalidAutoCloseFeeController(address controller);
+
+    event AutoCloseFeeControllerUpdated(address indexed oldController, address indexed newController);
 
     // ─────────────────────────────────────────────────────────────────────────
     // Taker order
@@ -181,6 +184,9 @@ interface IUnibuyOrderManager {
 
     /// @notice Set closer incentive fee rate (in bips) for a tick spacing tier.
     function setAutoCloseFeeBips(int24 tickSpacing, uint8 feeBips) external;
+
+    /// @notice Update the controller that can manage auto-close fee config.
+    function setAutoCloseFeeController(address newController) external;
 
     /// @notice Configured closer incentive fee rate (in bips) for a tick spacing tier.
     function autoCloseFeeBips(int24 tickSpacing) external view returns (uint8);

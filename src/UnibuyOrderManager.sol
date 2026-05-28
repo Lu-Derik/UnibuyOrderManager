@@ -14,6 +14,7 @@ import {TickMath}           from "@unibuy/libraries/TickMath.sol";
 import {ERC721Permit_v4}     from "./base/ERC721Permit_v4.sol";
 import {Multicall_v4}        from "./base/Multicall_v4.sol";
 import {ReentrancyLock}      from "./base/ReentrancyLock.sol";
+import {PoolInitializer}     from "./base/PoolInitializer.sol";
 import {Permit2Forwarder}    from "./base/Permit2Forwarder.sol";
 import {NativeWrapper}       from "./base/NativeWrapper.sol";
 import {BaseActionsRouter}   from "./base/BaseActionsRouter.sol";
@@ -38,6 +39,7 @@ contract UnibuyOrderManager is
     ERC721Permit_v4,
     Multicall_v4,
     ReentrancyLock,
+    PoolInitializer,
     BaseActionsRouter,
     DeltaResolver,
     Permit2Forwarder,

@@ -4,6 +4,7 @@ pragma solidity ^0.8.26;
 import {UnibuyPoolKey} from "@unibuy/types/UnibuyPoolKey.sol";
 import {Currency} from "@unibuy/types/Currency.sol";
 import {PathKey} from "../libraries/PathKey.sol";
+import {IPoolInitializer} from "./IPoolInitializer.sol";
 
 /// @title IUnibuyOrderManager
 /// @notice User-facing interface for the UniBuy order management contract.
@@ -18,7 +19,7 @@ import {PathKey} from "../libraries/PathKey.sol";
 /// Order types:
 ///   • Taker order  — immediate swap on the provided pool key.
 ///   • Maker order  — passive limit order on the provided pool key, represented as ERC-721 NFT.
-interface IUnibuyOrderManager {
+interface IUnibuyOrderManager is IPoolInitializer {
 
     // ─────────────────────────────────────────────────────────────────────────
     // Structs

@@ -3,6 +3,7 @@ pragma solidity ^0.8.26;
 
 import {OrderManagerTestBase}   from "./helpers/OrderManagerTestBase.t.sol";
 import {IUnibuyOrderManager}    from "../src/interfaces/IUnibuyOrderManager.sol";
+import {Actions}                from "../src/libraries/Actions.sol";
 import {UnibuyPoolId, UnibuyPoolIdLibrary, UnibuyPoolKey} from "@unibuy/types/UnibuyPoolKey.sol";
 import {TickMath}               from "@unibuy/libraries/TickMath.sol";
 
@@ -14,7 +15,43 @@ contract MakerOrderTest is OrderManagerTestBase {
     int24  constant TL  = 60;
     int24  constant TU  = 180;
     uint128 constant LIQ = 10e18;
+    bytes32 private constant EXECUTE_SIGNED_TYPEHASH = keccak256(
+        "ExecuteSigned(bytes actions,bytes[] params,bytes32 intent,bytes32 data,address sender,bytes32 nonce,uint256 deadline)"
+    );
     uint256 private _day;
+
+    function _hashBytesArray(bytes[] memory params) private pure returns (bytes32) {
+        uint256 len = params.length;
+        bytes32[] memory paramHashes = new bytes32[](len);
+        for (uint256 i = 0; i < len; ++i) {
+            paramHashes[i] = keccak256(params[i]);
+        }
+        return keccak256(abi.encodePacked(paramHashes));
+    }
+
+    function _executeSignedDigest(
+        bytes memory actions,
+        bytes[] memory params,
+        bytes32 intent,
+        bytes32 data,
+        address sender,
+        bytes32 nonce,
+        uint256 deadline
+    ) private view returns (bytes32) {
+        bytes32 structHash = keccak256(
+            abi.encode(
+                EXECUTE_SIGNED_TYPEHASH,
+                keccak256(actions),
+                _hashBytesArray(params),
+                intent,
+                data,
+                sender,
+                nonce,
+                deadline
+            )
+        );
+        return keccak256(abi.encodePacked("\x19\x01", orderManager.DOMAIN_SEPARATOR(), structHash));
+    }
 
     function _advanceDayWithCrossing(int24 tickL) internal returns (int24 nextTickL) {
         _day++;
@@ -185,6 +222,83 @@ contract MakerOrderTest is OrderManagerTestBase {
 
         assertEq(orderManager.lastTokenId(), beforeId, "zero amount should not mint a new NFT");
         assertEq(tokenA.balanceOf(alice), beforeA, "zero amount should not spend token0");
+    }
+
+    function test_execute_withoutDeadline_placesOrder() public {
+        uint256 orderInfo = _encodeOrderInfo(TL, TU, -TU, -TL, true, false);
+        bytes memory actions = abi.encodePacked(Actions.MAKE_ORDER, Actions.SETTLE_ALL);
+        bytes[] memory params = new bytes[](2);
+        params[0] = abi.encode(poolKey, orderInfo, LIQ, alice);
+        params[1] = abi.encode(poolKey.currency0);
+
+        uint256 nextId = orderManager.lastTokenId() + 1;
+        vm.prank(alice);
+        orderManager.execute(actions, params);
+
+        assertEq(orderManager.ownerOf(nextId), alice, "execute() should place maker order");
+    }
+
+    function test_executeSigned_placesOrderAndBlocksReplay() public {
+        uint256 signerPk = 0xA11CE;
+        address signer = vm.addr(signerPk);
+
+        tokenA.mint(signer, 1000e18);
+        vm.prank(signer);
+        tokenA.approve(address(orderManager), type(uint256).max);
+
+        uint256 orderInfo = _encodeOrderInfo(TL, TU, -TU, -TL, true, false);
+        bytes memory actions = abi.encodePacked(Actions.MAKE_ORDER, Actions.SETTLE_ALL);
+        bytes[] memory params = new bytes[](2);
+        params[0] = abi.encode(poolKey, orderInfo, LIQ, signer);
+        params[1] = abi.encode(poolKey.currency0);
+
+        bytes32 intent = keccak256("intent");
+        bytes32 data = keccak256("data");
+        bytes32 nonce = bytes32(uint256(1));
+        uint256 deadline = block.timestamp + 1 hours;
+
+        bytes32 digest = _executeSignedDigest(actions, params, intent, data, signer, nonce, deadline);
+        (uint8 v, bytes32 r, bytes32 s) = vm.sign(signerPk, digest);
+        bytes memory sig = abi.encodePacked(r, s, v);
+
+        uint256 nextId = orderManager.lastTokenId() + 1;
+        vm.prank(signer);
+        orderManager.executeSigned(actions, params, intent, data, true, nonce, sig, deadline);
+
+        assertEq(orderManager.ownerOf(nextId), signer, "executeSigned should place maker order");
+
+        vm.prank(signer);
+        vm.expectRevert(abi.encodeWithSelector(bytes4(keccak256("NonceAlreadyUsed()"))));
+        orderManager.executeSigned(actions, params, intent, data, true, nonce, sig, deadline);
+    }
+
+    function test_executeSigned_revert_invalidSignature() public {
+        uint256 signerPk = 0xB0B;
+        uint256 wrongPk = 0xCAFE;
+        address signer = vm.addr(signerPk);
+
+        tokenA.mint(signer, 1000e18);
+        vm.prank(signer);
+        tokenA.approve(address(orderManager), type(uint256).max);
+
+        uint256 orderInfo = _encodeOrderInfo(TL, TU, -TU, -TL, true, false);
+        bytes memory actions = abi.encodePacked(Actions.MAKE_ORDER, Actions.SETTLE_ALL);
+        bytes[] memory params = new bytes[](2);
+        params[0] = abi.encode(poolKey, orderInfo, LIQ, signer);
+        params[1] = abi.encode(poolKey.currency0);
+
+        bytes32 intent = keccak256("intent");
+        bytes32 data = keccak256("data");
+        bytes32 nonce = bytes32(uint256(2));
+        uint256 deadline = block.timestamp + 1 hours;
+
+        bytes32 digest = _executeSignedDigest(actions, params, intent, data, signer, nonce, deadline);
+        (uint8 v, bytes32 r, bytes32 s) = vm.sign(wrongPk, digest);
+        bytes memory sig = abi.encodePacked(r, s, v);
+
+        vm.prank(signer);
+        vm.expectRevert(abi.encodeWithSelector(IUnibuyOrderManager.InvalidExecuteSignature.selector));
+        orderManager.executeSigned(actions, params, intent, data, true, nonce, sig, deadline);
     }
 
     // ─────────────────────────────────────────────────────────────────────────

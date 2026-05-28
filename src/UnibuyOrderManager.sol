@@ -25,6 +25,7 @@ import {PathKey} from "./libraries/PathKey.sol";
 import {PackedOrderInfo, OrderInfoLibrary} from "./libraries/OrderInfoLibrary.sol";
 import {CalldataDecoder} from "./libraries/CalldataDecoder.sol";
 import {IAllowanceTransfer}  from "permit2/interfaces/IAllowanceTransfer.sol";
+import {ECDSA} from "../lib/permit2/lib/openzeppelin-contracts/contracts/utils/cryptography/ECDSA.sol";
 import {IWETH9}             from "./interfaces/external/IWETH9.sol";
 
 /// @title UnibuyOrderManager
@@ -71,6 +72,10 @@ contract UnibuyOrderManager is
 
     /// @inheritdoc IUnibuyOrderManager
     address public autoCloseFeeController;
+
+    bytes32 private constant _EXECUTE_SIGNED_TYPEHASH = keccak256(
+        "ExecuteSigned(bytes actions,bytes[] params,bytes32 intent,bytes32 data,address sender,bytes32 nonce,uint256 deadline)"
+    );
 
     // ─────────────────────────────────────────────────────────────────────────
     // Constructor
@@ -366,10 +371,58 @@ contract UnibuyOrderManager is
     )
         external
         payable
-        isNotLocked
         checkDeadline(deadline)
     {
+        execute(actions, params);
+    }
+
+    /// @inheritdoc IUnibuyOrderManager
+    function execute(
+        bytes calldata actions,
+        bytes[] calldata params
+    )
+        public
+        payable
+        isNotLocked
+    {
         _executeActions(abi.encode(actions, params));
+    }
+
+    /// @inheritdoc IUnibuyOrderManager
+    function executeSigned(
+        bytes calldata actions,
+        bytes[] calldata params,
+        bytes32 intent,
+        bytes32 data,
+        bool verifySender,
+        bytes32 nonce,
+        bytes calldata signature,
+        uint256 deadline
+    )
+        external
+        payable
+        checkDeadline(deadline)
+    {
+        address sender = verifySender ? msg.sender : address(0);
+        bytes32 structHash = keccak256(
+            abi.encode(
+                _EXECUTE_SIGNED_TYPEHASH,
+                keccak256(actions),
+                _hashBytesArray(params),
+                intent,
+                data,
+                sender,
+                nonce,
+                deadline
+            )
+        );
+
+        (address signer, ECDSA.RecoverError err) = ECDSA.tryRecover(_hashTypedData(structHash), signature);
+        if (err != ECDSA.RecoverError.NoError) revert InvalidExecuteSignature();
+        if (verifySender && signer != msg.sender) revert InvalidExecuteSignature();
+
+        _useUnorderedNonce(signer, uint256(nonce));
+        execute(actions, params);
     }
 
     // ─────────────────────────────────────────────────────────────────────────
@@ -440,6 +493,15 @@ contract UnibuyOrderManager is
         uint256 outAmount = uint256(uint128(delta0));
 
         if (outAmount < takeParams.amountOutMinimum) revert TooLittleReceived(takeParams.amountOutMinimum, outAmount);
+    }
+
+    function _hashBytesArray(bytes[] calldata params) private pure returns (bytes32) {
+        uint256 paramsLength = params.length;
+        bytes32[] memory paramHashes = new bytes32[](paramsLength);
+        for (uint256 i = 0; i < paramsLength; ++i) {
+            paramHashes[i] = keccak256(params[i]);
+        }
+        return keccak256(abi.encodePacked(paramHashes));
     }
 
     /// @dev Executes a multi-hop exact-input taker order.

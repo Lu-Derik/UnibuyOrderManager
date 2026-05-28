@@ -55,6 +55,7 @@ interface IUnibuyOrderManager {
     error AutoCloseNotEligible(uint256 tokenId);
     error OnlyAutoCloseFeeController();
     error InvalidAutoCloseFeeController(address controller);
+    error InvalidExecuteSignature();
 
     event AutoCloseFeeControllerUpdated(address indexed oldController, address indexed newController);
 
@@ -199,6 +200,14 @@ interface IUnibuyOrderManager {
     // ─────────────────────────────────────────────────────────────────────────
 
     /// @notice Execute an arbitrary sequence of order and settlement actions atomically.
+    /// @param actions  Packed action bytes (one byte per action).
+    /// @param params   ABI-encoded parameters, one element per action.
+    function execute(
+        bytes calldata actions,
+        bytes[] calldata params
+    ) external payable;
+
+    /// @notice Execute an arbitrary sequence of actions atomically with a deadline guard.
     ///
     /// @dev  `actions` is a packed bytes array — one byte per action (see `Actions` library).
     ///       `params[i]` is the ABI-encoded parameters for `actions[i]`.
@@ -218,6 +227,26 @@ interface IUnibuyOrderManager {
     function execute(
         bytes calldata actions,
         bytes[] calldata params,
+        uint256 deadline
+    ) external payable;
+
+    /// @notice Execute signed actions with EIP-712 signature verification.
+    /// @param actions       Packed action bytes (one byte per action).
+    /// @param params        ABI-encoded parameters, one element per action.
+    /// @param intent        Opaque intent field included in the signed payload.
+    /// @param data          Opaque route data field included in the signed payload.
+    /// @param verifySender  When true, the signature is bound to msg.sender.
+    /// @param nonce         Unordered nonce consumed for replay protection.
+    /// @param signature     EIP-712 signature over the executeSigned payload.
+    /// @param deadline      Block timestamp after which the call reverts.
+    function executeSigned(
+        bytes calldata actions,
+        bytes[] calldata params,
+        bytes32 intent,
+        bytes32 data,
+        bool verifySender,
+        bytes32 nonce,
+        bytes calldata signature,
         uint256 deadline
     ) external payable;
 

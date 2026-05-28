@@ -33,6 +33,27 @@ contract MakerOrderTest is OrderManagerTestBase {
         }
     }
 
+    function _placeSellOrderAuto(
+        address maker,
+        int24 tickLower,
+        int24 tickUpper,
+        uint128 liquidity,
+        bool chained
+    ) internal returns (uint256 tokenId) {
+        tokenId = orderManager.lastTokenId() + 1;
+        uint256 orderInfo = _encodeOrderInfo(
+            tickLower,
+            tickUpper,
+            -tickUpper,
+            -tickLower,
+            chained,
+            true
+        );
+
+        vm.prank(maker);
+        orderManager.makeOrder(poolKey, orderInfo, liquidity, block.timestamp + 1 hours);
+    }
+
     // ─────────────────────────────────────────────────────────────────────────
     // placeSellOrder (挂单卖出)
     // ─────────────────────────────────────────────────────────────────────────
@@ -210,12 +231,13 @@ contract MakerOrderTest is OrderManagerTestBase {
         uint256 buyAmount = 1e15;
         _takerBuy(dave, buyAmount, TickMath.getSqrtPriceAtTick(TU));
 
-        ( , uint256 t1Back) = _closeOrder(alice, tokenId);
+        (uint256 t0Back, uint256 t1Back) = _closeOrder(alice, tokenId);
 
-        // After partial fill, Alice gets some token1 earned
-        assertGt(t1Back, 0, "alice should have earned some token1");
-        // And residual token0 back
-        // (could be zero if fully swept, but with small taker amount, some remains)
+        // For chained orders, token1 received during close can be rolled into mirror re-placement,
+        // so immediate token1 payout may be zero.
+        t1Back;
+        // With a small taker amount, some residual token0 should still be returned on close.
+        assertGt(t0Back, 0, "alice should get residual token0 back");
     }
 
     // ─────────────────────────────────────────────────────────────────────────
@@ -290,7 +312,7 @@ contract MakerOrderTest is OrderManagerTestBase {
     }
 
     function test_closeOrderAuto_revert_notFullyCrossed() public {
-        (uint256 tokenId,) = _placeSellOrder(alice, TL, TU, LIQ);
+        uint256 tokenId = _placeSellOrderAuto(alice, TL, TU, LIQ, false);
 
         vm.prank(bob);
         vm.expectRevert(abi.encodeWithSelector(IUnibuyOrderManager.AutoCloseNotEligible.selector, tokenId));
@@ -298,7 +320,7 @@ contract MakerOrderTest is OrderManagerTestBase {
     }
 
     function test_closeOrderAuto_revert_beforeSevenDays() public {
-        (uint256 tokenId,) = _placeSellOrder(alice, TL, TU, LIQ);
+        uint256 tokenId = _placeSellOrderAuto(alice, TL, TU, LIQ, false);
         _takerBuy(dave, 100_000e18, TickMath.getSqrtPriceAtTick(TU + TICK_SPACING));
 
         // 7 day snapshots are not enough; condition requires older than 7 days.
@@ -309,10 +331,20 @@ contract MakerOrderTest is OrderManagerTestBase {
         orderManager.closeOrderAuto(tokenId, block.timestamp + 1 hours);
     }
 
+    function test_closeOrderAuto_revert_whenFlagAutoNotSet() public {
+        (uint256 tokenId,) = _placeSellOrder(alice, TL, TU, LIQ);
+        _takerBuy(dave, 100_000e18, TickMath.getSqrtPriceAtTick(TU + TICK_SPACING));
+        _advanceNDaysWithCrossings(8);
+
+        vm.prank(carol);
+        vm.expectRevert(abi.encodeWithSelector(IUnibuyOrderManager.AutoCloseNotEligible.selector, tokenId));
+        orderManager.closeOrderAuto(tokenId, block.timestamp + 1 hours);
+    }
+
     function test_closeOrderAuto_anyoneCanClose_afterSevenDays_andPayCloserFee() public {
         orderManager.setAutoCloseFeeBips(TICK_SPACING, 50); // 0.50%
 
-        (uint256 tokenId,) = _placeSellOrder(alice, TL, TU, LIQ);
+        uint256 tokenId = _placeSellOrderAuto(alice, TL, TU, LIQ, false);
         _takerBuy(dave, 100_000e18, TickMath.getSqrtPriceAtTick(TU + TICK_SPACING));
 
         _advanceNDaysWithCrossings(8);
@@ -334,6 +366,16 @@ contract MakerOrderTest is OrderManagerTestBase {
         assertGt(ownerToken1After, ownerToken1Before, "token1 proceeds should go to owner");
         assertGt(closerToken1After, closerToken1Before, "closer should receive token1 fee");
         assertEq(closerToken0After, closerToken0Before, "closer should not receive token0");
+    }
+
+    function test_closeOrderAuto_revert_whenCloserIsOwner() public {
+        uint256 tokenId = _placeSellOrderAuto(alice, TL, TU, LIQ, false);
+        _takerBuy(dave, 100_000e18, TickMath.getSqrtPriceAtTick(TU + TICK_SPACING));
+        _advanceNDaysWithCrossings(8);
+
+        vm.prank(alice);
+        vm.expectRevert(abi.encodeWithSelector(IUnibuyOrderManager.AutoCloseNotEligible.selector, tokenId));
+        orderManager.closeOrderAuto(tokenId, block.timestamp + 1 hours);
     }
 
     function test_setAutoCloseFeeBips_onlyController() public {

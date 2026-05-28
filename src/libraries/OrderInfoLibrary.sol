@@ -109,7 +109,7 @@ library OrderInfoLibrary {
     }
 
     /// @dev Does not write to storage; returns updated packed value.
-    function setManual(PackedOrderInfo info) internal pure returns (PackedOrderInfo _info) {
+    function clearAuto(PackedOrderInfo info) internal pure returns (PackedOrderInfo _info) {
         assembly ("memory-safe") {
             _info := and(info, CLEAR_AUTO)
         }

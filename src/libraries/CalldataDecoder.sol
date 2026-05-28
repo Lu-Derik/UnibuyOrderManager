@@ -196,19 +196,18 @@ library CalldataDecoder {
         }
     }
 
-    /// @dev equivalent to abi.decode(params, (UnibuyPoolKey, uint256))
-    function decodeCloseMakerParams(bytes calldata params)
+    /// @dev equivalent to abi.decode(params, (uint256))
+    function decodeCloseTokenId(bytes calldata params)
         internal
         pure
-        returns (UnibuyPoolKey calldata key, uint256 tokenId)
+        returns (uint256 tokenId)
     {
         assembly ("memory-safe") {
-            if lt(params.length, 0x80) {
+            if lt(params.length, 0x20) {
                 mstore(0, SLICE_ERROR_SELECTOR)
                 revert(0x1c, 4)
             }
-            key := params.offset
-            tokenId := calldataload(add(params.offset, 0x60))
+            tokenId := calldataload(params.offset)
         }
     }
 

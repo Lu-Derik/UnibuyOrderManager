@@ -304,9 +304,9 @@ contract UnibuyOrderManager is
     {
         address tokenOwner = ownerOf(tokenId);
 
-        // Look up the stored pool key to determine settlement currencies for TAKE_PAIR.
+        // Look up the stored pool key to determine settlement currencies.
         bytes19 poolId = _orders[tokenId].poolId();
-        UnibuyPoolKey memory resolvedPool = poolKeys[poolId];
+        UnibuyPoolKey memory orderPoolKey = poolKeys[poolId];
 
         bytes memory actions = abi.encodePacked(
             Actions.CLOSE_ORDER,
@@ -314,11 +314,11 @@ contract UnibuyOrderManager is
             Actions.TAKE_ALL
         );
         bytes[] memory params = new bytes[](3);
-        params[0] = abi.encode(resolvedPool, tokenId);
+        params[0] = abi.encode(tokenId);
         // Close token1 delta first: settle debt (if any) or take credit to tokenOwner.
-        params[1] = abi.encode(resolvedPool.currency1, tokenOwner);
+        params[1] = abi.encode(orderPoolKey.currency1, tokenOwner);
         // Then take any remaining token0 credit to tokenOwner.
-        params[2] = abi.encode(resolvedPool.currency0, tokenOwner);
+        params[2] = abi.encode(orderPoolKey.currency0, tokenOwner);
 
         _executeActions(abi.encode(actions, params));
     }
@@ -332,13 +332,9 @@ contract UnibuyOrderManager is
         isNotLocked
         checkDeadline(deadline)
     {
-        // Reuse stored pool key shape and tokenId payload used by closeOrder.
-        bytes19 poolId = _orders[tokenId].poolId();
-        UnibuyPoolKey memory resolvedPool = poolKeys[poolId];
-
         bytes memory actions = abi.encodePacked(Actions.CLOSE_ORDER_AUTO);
         bytes[] memory params = new bytes[](1);
-        params[0] = abi.encode(resolvedPool, tokenId);
+        params[0] = abi.encode(tokenId);
 
         _executeActions(abi.encode(actions, params));
     }
@@ -543,12 +539,20 @@ contract UnibuyOrderManager is
         CalldataDecoder.MakeOrderWithTakeParams calldata makeParams = params.decodeMakeOrderWithTakeParams();
         PackedOrderInfo orderInfo = PackedOrderInfo.wrap(makeParams.orderInfo);
 
-        uint256 remainingAmount0 = makeParams.amount0;
+        _makeOrderWithTakeInternal(makeParams.poolKey, orderInfo, makeParams.amount0, makeParams.owner);
+    }
+
+    function _makeOrderWithTakeInternal(
+        UnibuyPoolKey memory makeKey,
+        PackedOrderInfo orderInfo,
+        uint256 amount0,
+        address owner
+    ) internal {
+        uint256 remainingAmount0 = amount0;
         int24 tickLowerForMake = orderInfo.tickLower();
         int24 tickUpperForMake = orderInfo.tickUpper();
 
         // If tickLower implies a better immediate execution region, consume token0 in mirror first.
-        UnibuyPoolKey memory makeKey = makeParams.poolKey;
         UnibuyPoolKey memory mirrorKey = makeKey.mirrorKey();
         (uint160 mirrorCurrentPrice,,,,,, ) = poolManager.getSlot0(mirrorKey.toId());
         uint160 mirrorPriceLimit = TickMath.getSqrtPriceAtTick(-tickLowerForMake);
@@ -556,12 +560,12 @@ contract UnibuyOrderManager is
         if (mirrorPriceLimit > mirrorCurrentPrice) {
             (, int128 delta1) =
                 // forge-lint: disable-next-line(unsafe-typecast)
-                poolManager.takeOrder(mirrorKey, -int256(makeParams.amount0), mirrorPriceLimit);
+                poolManager.takeOrder(mirrorKey, -int256(amount0), mirrorPriceLimit);
 
             // mirror currency1 is original currency0, negative delta1 means currency0 spent.
             // forge-lint: disable-next-line(unsafe-typecast)
             uint256 spentAmount0 = uint256(uint128(-delta1));
-            remainingAmount0 = makeParams.amount0 - spentAmount0;
+            remainingAmount0 = amount0 - spentAmount0;
 
             // When pre-take is executed, normalize tickLower to the pool tick spacing.
             tickLowerForMake = _alignTickUpToSpacing(tickLowerForMake, makeKey.tickSpacing);
@@ -575,7 +579,7 @@ contract UnibuyOrderManager is
             makeKey,
             orderInfo,
             liquidity,
-            makeParams.owner
+            owner
         );
     }
 
@@ -607,12 +611,10 @@ contract UnibuyOrderManager is
     }
 
     /// @dev Closes a maker order. Contains all business logic (auth check, storage lookup/update,
-    ///      pool call, NFT burn, event). Credits are left for TAKE_PAIR.
-    ///      Direction (buy vs sell) is derived by comparing ord.poolId to key.toId().
-    /// @param params abi.encode(UnibuyPoolKey key, uint256 tokenId)
-    ///              key is the FORWARD pool key; used to derive order direction.
+    ///      pool call, NFT burn). Credits are left for TAKE_PAIR.
+    /// @param params abi.encode(uint256 tokenId)
     function _handleClose(bytes calldata params) internal {
-        (, uint256 tokenId) = params.decodeCloseMakerParams();
+        uint256 tokenId = params.decodeCloseTokenId();
 
         address caller = _getLocker();
         address tokenOwner = ownerOf(tokenId);
@@ -624,10 +626,10 @@ contract UnibuyOrderManager is
         int24 tickLower = orderInfo.tickLower();
         int24 tickUpper = orderInfo.tickUpper();
 
-        (int128 delta0, int128 delta1,) =
+        (, int128 delta1, ) =
             poolManager.closeOrder(orderPoolKey, tickLower, tickUpper, bytes32(tokenId));
 
-        if (delta0 == 0 && orderInfo.chained() && delta1 > 0) {
+        if (orderInfo.chained() && delta1 > 0) {
             // Roll all received token1 into the mirror pool in [tickLowerMirror, tickUpperMirror].
             // forge-lint: disable-next-line(unsafe-typecast)
             uint256 amount1Received = uint256(uint128(delta1));
@@ -640,9 +642,13 @@ contract UnibuyOrderManager is
                     .setTickLower(tickLowerMirror)
                     .setTickUpper(tickUpperMirror)
                     .setTickLowerMirror(tickLower)
-                    .setTickUpperMirror(tickUpper);
+                    .setTickUpperMirror(tickUpper)
+                    .setChained();
+                if (orderInfo.autoClose()) {
+                    mirrorOrderInfo = mirrorOrderInfo.setAuto();
+                }
 
-                _makeOrderInternal(orderPoolKey.mirrorKey(), mirrorOrderInfo, mirrorLiquidity, tokenOwner);
+                _makeOrderWithTakeInternal(orderPoolKey.mirrorKey(), mirrorOrderInfo, amount1Received, tokenOwner);
             }
         }
 
@@ -651,19 +657,19 @@ contract UnibuyOrderManager is
     }
 
     /// @dev Permissionless close for stale fully-crossed orders.
-    ///      Requirements:
-    ///      1) currentTick >= tickUpper
-    ///      2) first crossing at/after orderHeight happened more than 7 days ago
-    ///         (crossHeight < slot1.heights[7], and heights[7] is initialized)
-    ///      Token1 proceeds are always paid to token owner.
-    ///      Closer fee is additionally settled from token owner and paid to closer.
+    ///      Eligibility is enforced by `poolManager.closeOrder` via `bCloseLate`.
+    ///      This manager only validates the returned flag and then settles deltas.
+    ///      Token1 credit is distributed between owner and closer fee recipient in one pass,
+    ///      without requiring additional owner settlement approvals.
     function _handleCloseAuto(bytes calldata params) internal {
-        (, uint256 tokenId) = params.decodeCloseMakerParams();
+        uint256 tokenId = params.decodeCloseTokenId();
 
         address closer = _getLocker();
         address tokenOwner = ownerOf(tokenId);
+        if (closer == tokenOwner) revert AutoCloseNotEligible(tokenId);
 
         PackedOrderInfo orderInfo = _orders[tokenId];
+        if (!orderInfo.autoClose()) revert AutoCloseNotEligible(tokenId);
         UnibuyPoolKey memory orderPoolKey = poolKeys[orderInfo.poolId()];
 
         int24 tickLower = orderInfo.tickLower();
@@ -671,34 +677,54 @@ contract UnibuyOrderManager is
         (int128 delta0, int128 delta1, bool bCloseLate) =
             poolManager.closeOrder(orderPoolKey, tickLower, tickUpper, bytes32(tokenId));
         if (!bCloseLate) revert AutoCloseNotEligible(tokenId);
-
-        // Token1 must be settled to owner only.
-        if (delta1 > 0) {
-            // forge-lint: disable-next-line(unsafe-typecast)
-            _take(orderPoolKey.currency1, tokenOwner, uint256(uint128(delta1)));
-        } else if (delta1 < 0) {
-            // forge-lint: disable-next-line(unsafe-typecast)
-            _settle(orderPoolKey.currency1, tokenOwner, uint256(uint128(-delta1)));
-        }
+        
+        if (delta1 < 0) revert AutoCloseNotEligible(tokenId);   // Not possible to have token1 debt when closing.  
+        // delta0 < 0 is possible to happen, we could swap token 0 with token 1 for user. Just keep it simple for now.
+        if (delta0 < 0) revert AutoCloseNotEligible(tokenId);  
+        
+        // Seed helper-fee calculation from closeOrder's token1 delta.
+        // Final owner payout intentionally refreshes from full transient credit,
+        // which allows unified settlement of all token1 credit in this callback.
+        // forge-lint: disable-next-line(unsafe-typecast)
+        uint256 token1Out = uint256(uint128(delta1));
 
         uint8 feeBips = autoCloseFeeBips[orderPoolKey.tickSpacing];
-        if (feeBips > 0 && closer != tokenOwner && delta1 > 0) {
-            // forge-lint: disable-next-line(unsafe-typecast)
-            uint256 token1Out = uint256(uint128(delta1));
+        if (feeBips > 0 && token1Out > 0) {
             uint256 closerFee = FullMath.mulDiv(token1Out, feeBips, 10_000);
             if (closerFee > 0) {
-                _settle(orderPoolKey.currency1, tokenOwner, closerFee);
                 _take(orderPoolKey.currency1, closer, closerFee);
+                token1Out -= closerFee;
             }
         }
 
-        // Any residual token0 is still settled to owner.
-        if (delta0 > 0) {
-            // forge-lint: disable-next-line(unsafe-typecast)
-            _take(orderPoolKey.currency0, tokenOwner, uint256(uint128(delta0)));
-        } else if (delta0 < 0) {
-            // forge-lint: disable-next-line(unsafe-typecast)
-            _settle(orderPoolKey.currency0, tokenOwner, uint256(uint128(-delta0)));
+        if (orderInfo.chained() && token1Out > 0) {
+            // Roll all received token1 into the mirror pool in [tickLowerMirror, tickUpperMirror].
+            int24 tickLowerMirror = orderInfo.tickLowerMirror();
+            int24 tickUpperMirror = orderInfo.tickUpperMirror();
+            uint128 mirrorLiquidity = _liquidityForAmount0(tickLowerMirror, tickUpperMirror, token1Out);
+
+            if (mirrorLiquidity > 0) {
+                PackedOrderInfo mirrorOrderInfo = orderInfo
+                    .setTickLower(tickLowerMirror)
+                    .setTickUpper(tickUpperMirror)
+                    .setTickLowerMirror(tickLower)
+                    .setTickUpperMirror(tickUpper)
+                    .setChained()
+                    .setAuto();
+
+                _makeOrderWithTakeInternal(orderPoolKey.mirrorKey(), mirrorOrderInfo, token1Out, tokenOwner);
+            }
+        }
+
+        // Design choice: unified settlement for all token1 credit accumulated in this callback.
+        token1Out = _getFullCredit(orderPoolKey.currency1);
+        if (token1Out > 0) {
+            _take(orderPoolKey.currency1, tokenOwner, token1Out);
+        }
+
+        uint256 token0Out = _getFullCredit(orderPoolKey.currency0);
+        if (token0Out > 0) {
+            _take(orderPoolKey.currency0, tokenOwner, token0Out);
         }
 
         _orders[tokenId] = PackedOrderInfo.wrap(0);

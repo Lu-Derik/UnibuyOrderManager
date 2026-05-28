@@ -43,7 +43,7 @@ library Actions {
     uint8 internal constant MAKE_ORDER = 0x05;
 
     /// @notice Cancel / close an existing maker order and receive proceeds.
-    /// @dev params: abi.encode(UnibuyPoolKey key, uint256 tokenId)
+    /// @dev params: abi.encode(uint256 tokenId)
     ///   Returns: abi.encode(uint256 token0Amount, uint256 token1Amount)
     uint8 internal constant CLOSE_ORDER = 0x06;
 
@@ -53,7 +53,7 @@ library Actions {
     uint8 internal constant MAKE_ORDER_WITH_TAKE = 0x07;
 
     /// @notice Permissionless close path for stale fully-crossed orders.
-    /// @dev params: abi.encode(UnibuyPoolKey key, uint256 tokenId)
+    /// @dev params: abi.encode(uint256 tokenId)
     uint8 internal constant CLOSE_ORDER_AUTO = 0x08;
 
     // ── Settlement actions ────────────────────────────────────────────────────
